@@ -1,3 +1,6 @@
+#ifndef SYSTEM_STATS_H
+#define SYSTEM_STATS_H
+
 #include <cstdint>
 #include <string>
 #include <iostream>
@@ -176,3 +179,5 @@ private:
     HMODULE hPlatformDLL_ = nullptr;
     ICPUEx* cpuInterface_ = nullptr;
 };
+
+#endif // SYSTEM_STATS_H
