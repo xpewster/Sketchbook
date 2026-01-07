@@ -1,0 +1,9 @@
+build/
+.vs/
+CMakeFiles/
+libs/
+_deps/
+*.exe
+*.dll
+*.obj
+out
