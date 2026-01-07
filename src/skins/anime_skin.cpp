@@ -21,9 +21,11 @@
     - "skin.character.hot.png": Path to the character image when CPU is hot
     - "skin.weather.icon.sunny.png": Path to sunny weather icon
     - "skin.weather.icon.rainy.png": Path to rainy weather icon
+    - "skin.weather.icon.thunderstorm.png": Path to thunderstorm weather icon
     - "skin.weather.icon.cloudy.png": Path to cloudy weather icon
     - "skin.weather.icon.night.png": Path to night weather icon
     - "skin.weather.icon.windy.png": Path to windy weather icon
+    - "skin.weather.icon.foggy.png": Path to foggy weather icon
     - "skin.weather.icon.width": Width of weather icon
     - "skin.weather.icon.height": Height of weather icon
     - "skin.weather.icon.x": X position of weather icon
@@ -52,13 +54,18 @@
     - "skin.hwmon.mem.usage.text.color": Color of memory usage text (hex RGB)
     - "skin.hwmon.mem.usage.text.size": Font size of memory usage text
     - "skin.hwmon.mem.usage.icon.path": Path to memory usage icon
+    - "skin.hwmon.train.next.text.x": X position of next train text
+    - "skin.hwmon.train.next.text.y": Y position of next train text
+    - "skin.hwmon.train.next.text.color": Color of next train text (hex RGB)
+    - "skin.hwmon.train.next.text.size": Font size of next train text
+    - "skin.hwmon.train.next.icon.path": Path to next train icon
 */
 
 class AnimeSkin : public Skin {
 public:
     AnimeSkin(std::string name, int width, int height) : Skin(name, width, height) {}
 
-    void draw(sf::RenderTexture& texture, SystemStats& stats, WeatherData& weather) override {
+    void draw(sf::RenderTexture& texture, SystemStats& stats, WeatherData& weather, TrainData& train) override {
         texture.clear(sf::Color::Black);
 
         frameCount++;

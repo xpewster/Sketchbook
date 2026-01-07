@@ -18,10 +18,12 @@
 
 #include "ui/text_box.cpp"
 #include "ui/button.cpp"
+#include "ui/dropdown.cpp"
 #include "skins/skin.h"
 #include "skins/debug_skin.cpp"
 #include "settings.hpp"
 #include "weather.hpp"
+#include "train.hpp"
 
 class TcpConnection {
 public:
@@ -247,6 +249,9 @@ int main() {
     // Weather monitor
     WeatherMonitor weatherMonitor(settings.weather.apiKey, settings.weather.latitude, settings.weather.longitude, settings.weather.units);
     
+    // Train monitor
+    TrainMonitor trainMonitor(settings.train.apiBase, settings.train.apiKey, settings.train.stopId0, settings.train.stopId1);
+
     // Status
     std::string statusMsg = "Disconnected";
     
@@ -254,6 +259,11 @@ int main() {
     TextInput ipInput(10, 8, 120, 24, settings.network.espIP, font);
     Button connectBtn(140, 8, 90, 24, "Connect", font);
     connectBtn.setColor(sf::Color(100, 255, 100), sf::Color(150, 255, 150));
+    std::vector<std::string> skinOptions;
+    for (const auto& pair : skins) {
+        skinOptions.push_back(pair.first);
+    }
+    DropdownSelector skinDropdown(240, 8, 120, 24, skinOptions, font);
     
     // Status indicator
     sf::CircleShape statusIndicator(8);
@@ -303,6 +313,7 @@ int main() {
                 }
             }
             ipInput.handleEvent(*event, mousePos, window);
+            skinDropdown.handleEvent(*event, mousePos, window);
         }
         
         // Check for send errors from background thread
@@ -346,7 +357,8 @@ int main() {
         // Get system stats and draw to texture
         SystemStats stats = monitor.getStats();
         WeatherData weather = weatherMonitor.getWeather();
-        skins[skinName]->draw(qualiaTexture, stats, weather);
+        TrainData train = trainMonitor.getTrain();
+        skins[skinName]->draw(qualiaTexture, stats, weather, train);
         
         // Queue frame for sending (non-blocking)
         if (connected && sendClock.getElapsedTime().asSeconds() >= sendInterval) {
@@ -365,6 +377,7 @@ int main() {
         window.draw(menuBar);
         ipInput.draw(window);
         connectBtn.draw(window);
+        skinDropdown.draw(window);
         window.draw(statusIndicator);
         window.draw(statusIndicatorBorder);
         

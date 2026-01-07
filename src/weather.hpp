@@ -1,9 +1,10 @@
 #pragma once
 
-#include <SFML/Network.hpp>
+#include "../http.h"
 #include <nlohmann/json.hpp>
 #include <chrono>
 #include <string>
+#include <iostream>
 
 using json = nlohmann::json;
 
@@ -21,6 +22,7 @@ struct WeatherData {
     bool isNight = false;  // true if icon ends with 'n'
     int sunrise = 0;  // unix timestamp
     int sunset = 0;   // unix timestamp
+    bool available = false; // true if data is valid
 };
 
 class WeatherMonitor {
@@ -54,17 +56,15 @@ private:
                           "&units=" + units_ +
                           "&appid=" + apiKey_;
         
-        sf::Http http("http://api.openweathermap.org");
-        sf::Http::Request request(path);
-        request.setMethod(sf::Http::Request::Method::Get);
+        HttpResponse response = get("http://api.openweathermap.org" + path);
         
-        sf::Http::Response response = http.sendRequest(request);
-        
-        if (response.getStatus() == sf::Http::Response::Status::Ok) {
-            parseWeatherData(response.getBody());
+        if (response.isOk()) {
+            parseWeatherData(response.body);
             std::cout << "Weather data updated successfully: [IconCode " << cachedWeather_.iconCode << "] [IsNight " << cachedWeather_.isNight << "] [Temp " << cachedWeather_.currentTemp << "] [WindSpeed " << cachedWeather_.windSpeed << "]\n";
+            cachedWeather_.available = true;
         } else {
-            std::cerr << "Weather API request failed: " << static_cast<int>(response.getStatus()) << "\n";
+            std::cerr << "Weather API request failed: " << response.statusCode << "\n";
+            cachedWeather_.available = false;
         }
     }
     

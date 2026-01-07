@@ -7,6 +7,7 @@
 #include "../system_stats.h"
 #include "../utils/xml.h"
 #include "../weather.hpp"
+#include "../train.hpp"
 
 class Skin {
 private:
@@ -39,7 +40,7 @@ public:
         return 0;
     }
 
-    virtual void draw(sf::RenderTexture& texture, SystemStats& stats, WeatherData& weather) = 0;
+    virtual void draw(sf::RenderTexture& texture, SystemStats& stats, WeatherData& weather, TrainData& train) = 0;
 
     virtual ~Skin() = default;
 };

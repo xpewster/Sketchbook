@@ -33,11 +33,19 @@ public:
     struct Preferences {
         std::string selectedSkin = "Debug";
     };
+
+    struct TrainConfig {
+        std::string apiKey;
+        std::string stopId0;
+        std::string stopId1;
+        std::string apiBase;
+    };
     
     WeatherConfig weather;
     // DisplayConfig display;
     NetworkConfig network;
     Preferences preferences;
+    TrainConfig train;
     
     // Load settings from settings.toml in exe directory
     bool load() {
@@ -80,6 +88,13 @@ public:
                 network.espIP = (*networkTable)["esp_ip"].value_or("192.168.1.100");
                 network.espPort = (*networkTable)["esp_port"].value_or(8080);
             }
+
+            if (auto trainTable = config["train"].as_table()) {
+                train.apiKey = (*trainTable)["api_key"].value_or("");
+                train.stopId0 = (*trainTable)["stop_id_0"].value_or("");
+                train.stopId1 = (*trainTable)["stop_id_1"].value_or("");
+                train.apiBase = (*trainTable)["api_base"].value_or("");
+            }
             
             std::cout << "Settings loaded successfully from: " << settingsPath << "\n";
             return true;
@@ -121,6 +136,13 @@ public:
 
             config.insert_or_assign("preferences", toml::table{
                 {"selected_skin", preferences.selectedSkin}
+            });
+
+            config.insert_or_assign("train", toml::table{
+                {"api_key", train.apiKey},
+                {"stop_id_0", train.stopId0},
+                {"stop_id_1", train.stopId1},
+                {"api_base", train.apiBase}
             });
             
             std::ofstream file(settingsPath);
@@ -166,6 +188,13 @@ private:
 
         config.insert_or_assign("preferences", toml::table{
             {"selected_skin", "Debug"}
+        });
+
+        config.insert_or_assign("train", toml::table{
+            {"api_key", "YOUR_API_KEY_HERE"},
+            {"stop_id_0", "40_99610"},
+            {"stop_id_1", "40_99603"},
+            {"api_base", "https://api.pugetsound.onebusaway.org"}
         });
         
         std::ofstream file(path);

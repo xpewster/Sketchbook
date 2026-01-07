@@ -4,7 +4,7 @@ class DebugSkin : public Skin {
 public:
     DebugSkin(std::string name, int width, int height) : Skin(name, width, height) {}
 
-    void draw(sf::RenderTexture& texture, SystemStats& stats, WeatherData& weather) override {
+    void draw(sf::RenderTexture& texture, SystemStats& stats, WeatherData& weather, TrainData& train) override {
         texture.clear(sf::Color::Black);
         
         int y = 20;
@@ -108,6 +108,22 @@ public:
         weatherInfo.setPosition(sf::Vector2f(20, (float)y));
         weatherInfo.setFillColor(sf::Color(150, 150, 150));
         texture.draw(weatherInfo);
+
+        // Train section
+        y += 50;
+        sf::Text trainLabel(font, "TRAIN", 18);
+        trainLabel.setPosition(sf::Vector2f(20, (float)y));
+        trainLabel.setFillColor(sf::Color::White);
+        texture.draw(trainLabel);
+        y += 30;
+
+        char trainText[128];
+        snprintf(trainText, sizeof(trainText), "Next: %s in %d min, %s in %d min",
+                train.headsign0.c_str(), (int)train.minsToNextTrain0, train.headsign1.c_str(), (int)train.minsToNextTrain1);
+        sf::Text trainInfo(font, trainText, 14);
+        trainInfo.setPosition(sf::Vector2f(20, (float)y));
+        trainInfo.setFillColor(sf::Color(150, 150, 150));
+        texture.draw(trainInfo);
         
         texture.display();
     }
