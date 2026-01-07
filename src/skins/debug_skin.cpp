@@ -93,9 +93,9 @@ public:
         texture.draw(memUsageText);
 
         // Weather section
-        y += 50;
+        y -= 140;
         sf::Text weatherLabel(font, "WEATHER", 18);
-        weatherLabel.setPosition(sf::Vector2f(20, (float)y));
+        weatherLabel.setPosition(sf::Vector2f(400, (float)y));
         weatherLabel.setFillColor(sf::Color::White);
         texture.draw(weatherLabel);
         y += 30;
@@ -105,14 +105,14 @@ public:
         snprintf(weatherText, sizeof(weatherText), "Icon: %s, Temp: %.1f %s, Wind: %.1f mph",
                 weather.iconCode.c_str(), weather.currentTemp, "F", weather.windSpeed);
         sf::Text weatherInfo(font, weatherText, 14);
-        weatherInfo.setPosition(sf::Vector2f(20, (float)y));
+        weatherInfo.setPosition(sf::Vector2f(400, (float)y));
         weatherInfo.setFillColor(sf::Color(150, 150, 150));
         texture.draw(weatherInfo);
 
         // Train section
         y += 50;
         sf::Text trainLabel(font, "TRAIN", 18);
-        trainLabel.setPosition(sf::Vector2f(20, (float)y));
+        trainLabel.setPosition(sf::Vector2f(400, (float)y));
         trainLabel.setFillColor(sf::Color::White);
         texture.draw(trainLabel);
         y += 30;
@@ -121,7 +121,7 @@ public:
         snprintf(trainText, sizeof(trainText), "Next: %s in %d min, %s in %d min",
                 train.headsign0.c_str(), (int)train.minsToNextTrain0, train.headsign1.c_str(), (int)train.minsToNextTrain1);
         sf::Text trainInfo(font, trainText, 14);
-        trainInfo.setPosition(sf::Vector2f(20, (float)y));
+        trainInfo.setPosition(sf::Vector2f(400, (float)y));
         trainInfo.setFillColor(sf::Color(150, 150, 150));
         texture.draw(trainInfo);
         

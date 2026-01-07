@@ -32,6 +32,7 @@ public:
 
     struct Preferences {
         std::string selectedSkin = "Debug";
+        bool rotate180 = false;
     };
 
     struct TrainConfig {
@@ -65,6 +66,7 @@ public:
 
             if (auto prefTable = config["preferences"].as_table()) {
                 preferences.selectedSkin = (*prefTable)["selected_skin"].value_or("Debug");
+                preferences.rotate180 = (*prefTable)["rotate_180"].value_or(false);
             }
             
             // Parse weather settings
@@ -135,7 +137,8 @@ public:
             });
 
             config.insert_or_assign("preferences", toml::table{
-                {"selected_skin", preferences.selectedSkin}
+                {"selected_skin", preferences.selectedSkin},
+                {"rotate_180", preferences.rotate180}
             });
 
             config.insert_or_assign("train", toml::table{
@@ -187,7 +190,8 @@ private:
         });
 
         config.insert_or_assign("preferences", toml::table{
-            {"selected_skin", "Debug"}
+            {"selected_skin", "Debug"},
+            {"rotate_180", false}
         });
 
         config.insert_or_assign("train", toml::table{

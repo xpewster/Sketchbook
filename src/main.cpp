@@ -21,6 +21,7 @@
 #include "ui/dropdown.cpp"
 #include "skins/skin.h"
 #include "skins/debug_skin.cpp"
+#include "skins/anime_skin.cpp"
 #include "settings.hpp"
 #include "weather.hpp"
 #include "train.hpp"
@@ -187,6 +188,32 @@ void textureToRGB565(sf::RenderTexture& texture, qualia::Image& image) {
     }
 }
 
+// Convert RenderTexture to RGB565 for Qualia with 90 degree rotation
+void textureToRGB565Rot90(sf::RenderTexture& texture, qualia::Image& image) {
+    sf::Image sfImg = texture.getTexture().copyToImage();
+    
+    for (int y = 0; y < image.height; y++) {
+        for (int x = 0; x < image.width; x++) {
+            // Rotate 90 degrees clockwise
+            sf::Color c = sfImg.getPixel(sf::Vector2u(y, image.width - 1 - x));
+            image.at(x, y) = qualia::rgb565(c.r, c.g, c.b);
+        }
+    }
+}
+
+// Convert RenderTexture to RGB565 for Qualia with -90 degree rotation
+void textureToRGB565RotNeg90(sf::RenderTexture& texture, qualia::Image& image) {
+    sf::Image sfImg = texture.getTexture().copyToImage();
+    
+    for (int y = 0; y < image.height; y++) {
+        for (int x = 0; x < image.width; x++) {
+            // Rotate 90 degrees counterclockwise
+            sf::Color c = sfImg.getPixel(sf::Vector2u(image.height - 1 - y, x));
+            image.at(x, y) = qualia::rgb565(c.r, c.g, c.b);
+        }
+    }
+}
+
 int main() {
     if (!IsUserAnAdmin()) {
         std::cout << "This application must be run as administrator.\n";
@@ -211,10 +238,10 @@ int main() {
 
     const int menuHeight = 40;
     const int previewScale = 1;
-    const int previewWidth = qualia::DISPLAY_WIDTH / previewScale;
-    const int previewHeight = qualia::DISPLAY_HEIGHT / previewScale;
-    const int windowWidth = previewHeight + 40; // Use previewHeight since the preview will be rotated 90 degrees
-    const int windowHeight = menuHeight + previewWidth + 50; // Use previewWidth since the preview will be rotated 90 degrees
+    const int previewWidth = qualia::DISPLAY_HEIGHT / previewScale; // Use DISPLAY_HEIGHT since the preview will be rotated 90 degrees
+    const int previewHeight = qualia::DISPLAY_WIDTH / previewScale; // Use DISPLAY_WIDTH since the preview will be rotated 90 degrees
+    const int windowWidth = previewWidth + 40; 
+    const int windowHeight = menuHeight + previewHeight + 50;
     
     sf::RenderWindow window(sf::VideoMode(sf::Vector2u(windowWidth, windowHeight)), "Sketchbook", sf::Style::Titlebar | sf::Style::Close);
     window.setFramerateLimit(30);
@@ -231,9 +258,12 @@ int main() {
     DebugSkin debugSkin = DebugSkin(std::string("Debug"), qualia::DISPLAY_WIDTH, qualia::DISPLAY_HEIGHT);
     debugSkin.initialize("");
     skins["Debug"] = &debugSkin;
+    AnimeSkin animeSkin = AnimeSkin(std::string("Sketchbook"), qualia::DISPLAY_WIDTH, qualia::DISPLAY_HEIGHT);
+    animeSkin.initialize("skins/sketchbook/skin.xml");
+    skins["Sketchbook"] = &animeSkin;
     
     // Create render texture at Qualia's native resolution
-    sf::RenderTexture qualiaTexture(sf::Vector2u(qualia::DISPLAY_WIDTH, qualia::DISPLAY_HEIGHT));
+    sf::RenderTexture qualiaTexture(sf::Vector2u(qualia::DISPLAY_HEIGHT, qualia::DISPLAY_WIDTH)); // Swapped dimensions for 90 degree rotation
     
     // RGB565 image buffer for sending
     qualia::Image frameBuffer(qualia::DISPLAY_WIDTH, qualia::DISPLAY_HEIGHT);
@@ -281,7 +311,7 @@ int main() {
     int previewY = 20;
     
     // Preview border
-    sf::RectangleShape previewBorder(sf::Vector2f((float)(previewHeight + 4), (float)(previewWidth + 4)));
+    sf::RectangleShape previewBorder(sf::Vector2f((float)(previewWidth + 4), (float)(previewHeight + 4)));
     previewBorder.setPosition(sf::Vector2f((float)(previewX - 2), (float)(previewY - 2) + menuHeight));
     previewBorder.setFillColor(sf::Color(80, 80, 80));
     
@@ -314,6 +344,7 @@ int main() {
             }
             ipInput.handleEvent(*event, mousePos, window);
             skinDropdown.handleEvent(*event, mousePos, window);
+            skinName = skinDropdown.getSelectedValue();
         }
         
         // Check for send errors from background thread
@@ -362,8 +393,13 @@ int main() {
         
         // Queue frame for sending (non-blocking)
         if (connected && sendClock.getElapsedTime().asSeconds() >= sendInterval) {
+            // Rotate texture 90 degrees and convert to RGB565 in one step while copying to frame buffer
             sendClock.restart();
-            textureToRGB565(qualiaTexture, frameBuffer);
+            if (settings.preferences.rotate180) {
+                textureToRGB565RotNeg90(qualiaTexture, frameBuffer);
+            } else {
+                textureToRGB565Rot90(qualiaTexture, frameBuffer);
+            }
             sender.queueFrame(frameBuffer);
         }
         
@@ -373,22 +409,14 @@ int main() {
         // Draw window
         window.clear(sf::Color(60, 60, 60));
         
-        // Menu bar
-        window.draw(menuBar);
-        ipInput.draw(window);
-        connectBtn.draw(window);
-        skinDropdown.draw(window);
-        window.draw(statusIndicator);
-        window.draw(statusIndicatorBorder);
-        
         // Preview (rotated 90 degrees)
         window.draw(previewBorder);
         previewSprite.setTexture(qualiaTexture.getTexture());
         previewSprite.setOrigin(sf::Vector2f((float)previewWidth / 2, (float)previewHeight / 2));
-        previewSprite.setPosition(sf::Vector2f((float)previewX + (float)previewHeight / 2, (float)previewY + (float)previewWidth / 2 + menuHeight));
-        previewSprite.setScale(sf::Vector2f((float)previewWidth / qualia::DISPLAY_WIDTH, 
-                               (float)previewHeight / qualia::DISPLAY_HEIGHT));
-        previewSprite.setRotation(sf::degrees(-90));
+        previewSprite.setPosition(sf::Vector2f((float)previewX + (float)previewWidth / 2, (float)previewY + (float)previewHeight / 2 + menuHeight));
+        // previewSprite.setScale(sf::Vector2f((float)previewWidth / qualia::DISPLAY_WIDTH, 
+        //                        (float)previewHeight / qualia::DISPLAY_HEIGHT));
+        // previewSprite.setRotation(sf::degrees(-90));
         window.draw(previewSprite);
 
         // // Draw dot at center of preview for alignment reference
@@ -396,6 +424,14 @@ int main() {
         // centerDot.setFillColor(sf::Color::Red);
         // centerDot.setPosition(sf::Vector2f((float)previewX + (float)previewHeight / 2 - 3, (float)previewY + (float)previewWidth / 2 - 3));
         // window.draw(centerDot);
+
+        // Menu bar
+        window.draw(menuBar);
+        ipInput.draw(window);
+        connectBtn.draw(window);
+        skinDropdown.draw(window);
+        window.draw(statusIndicator);
+        window.draw(statusIndicatorBorder);
         
         // Status bar
         window.draw(statusText);

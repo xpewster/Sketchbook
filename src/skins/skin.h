@@ -20,10 +20,11 @@ protected:
     std::unordered_map<std::string, std::string> parameters;
     std::vector<sf::Font*> fonts;
     unsigned long frameCount = 0;
+    std::string baseSkinDir;
 
 public:
 
-    Skin(std::string name, int width, int height) : name(name), DISPLAY_WIDTH(width), DISPLAY_HEIGHT(height) {}
+    Skin(std::string name, int width, int height) : name(name), DISPLAY_WIDTH(width), DISPLAY_HEIGHT(height) {} 
 
     int initialize(const std::string& xmlFilePath) {
         if (!font.openFromFile("C:/Windows/Fonts/times.ttf")) {
@@ -32,6 +33,8 @@ public:
         }
         fonts.push_back(&font);
         if (!xmlFilePath.empty()) {
+            baseSkinDir = std::filesystem::path(xmlFilePath).parent_path().string();
+            std::cout << "Loading skin from: " << baseSkinDir << "\n";
             if (parseXMLFile(xmlFilePath, parameters) != 0) {
                 std::cerr << "Failed to parse XML file: " << xmlFilePath << "\n";
                 return 1;

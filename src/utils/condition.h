@@ -49,4 +49,5 @@ inline std::string getWeatherIconNameSimplified(const WeatherData& weather) {
             else if (iconCode == "50") return "foggy";
         }
     }
+    return ""; // Default icon
 }
