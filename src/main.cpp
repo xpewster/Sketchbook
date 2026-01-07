@@ -20,8 +20,8 @@
 #include "ui/button.cpp"
 #include "skins/skin.h"
 #include "skins/debug_skin.cpp"
-
-const int TCP_PORT = 8765;
+#include "settings.hpp"
+#include "weather.hpp"
 
 class TcpConnection {
 public:
@@ -35,7 +35,7 @@ public:
         WSACleanup();
     }
     
-    bool connect(const std::string& host) {
+    bool connect(const std::string& host, const int tcp_port) {
         disconnect();
         
         sock_ = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
@@ -51,7 +51,7 @@ public:
         
         sockaddr_in serverAddr = {};
         serverAddr.sin_family = AF_INET;
-        serverAddr.sin_port = htons(TCP_PORT);
+        serverAddr.sin_port = htons(tcp_port);
         
         if (inet_pton(AF_INET, host.c_str(), &serverAddr.sin_addr) != 1) {
             closesocket(sock_);
@@ -191,6 +191,22 @@ int main() {
         return 1;
     }
 
+    std::cout << "Starting Sketchbook...\n";
+
+    Settings settings;
+    if (!settings.load()) {
+        std::cerr << "Failed to load settings\n";
+        return 1;
+    }
+    
+    // Validate API key
+    if (settings.weather.apiKey == "YOUR_API_KEY_HERE" || settings.weather.apiKey.empty()) {
+        std::cerr << "Please set your OpenWeatherMap API key in settings.toml\n";
+        return 1;
+    }
+
+    std::cout << "Successfully loaded settings.\n";
+
     const int menuHeight = 40;
     const int previewScale = 1;
     const int previewWidth = qualia::DISPLAY_WIDTH / previewScale;
@@ -198,7 +214,7 @@ int main() {
     const int windowWidth = previewHeight + 40; // Use previewHeight since the preview will be rotated 90 degrees
     const int windowHeight = menuHeight + previewWidth + 50; // Use previewWidth since the preview will be rotated 90 degrees
     
-    sf::RenderWindow window(sf::VideoMode(sf::Vector2u(windowWidth, windowHeight)), "Qualia Streamer", sf::Style::Titlebar | sf::Style::Close);
+    sf::RenderWindow window(sf::VideoMode(sf::Vector2u(windowWidth, windowHeight)), "Sketchbook", sf::Style::Titlebar | sf::Style::Close);
     window.setFramerateLimit(30);
     
     // Load font
@@ -208,11 +224,11 @@ int main() {
         return 1;
     }
 
-    std::vector<Skin*> skins;
-    int skinIndex = 0;
+    std::unordered_map<std::string, Skin*> skins;
+    std::string skinName = "Debug";
     DebugSkin debugSkin = DebugSkin(std::string("Debug"), qualia::DISPLAY_WIDTH, qualia::DISPLAY_HEIGHT);
     debugSkin.initialize("");
-    skins.push_back(&debugSkin);
+    skins["Debug"] = &debugSkin;
     
     // Create render texture at Qualia's native resolution
     sf::RenderTexture qualiaTexture(sf::Vector2u(qualia::DISPLAY_WIDTH, qualia::DISPLAY_HEIGHT));
@@ -227,12 +243,15 @@ int main() {
     
     // System monitor
     SystemMonitor monitor;
+
+    // Weather monitor
+    WeatherMonitor weatherMonitor(settings.weather.apiKey, settings.weather.latitude, settings.weather.longitude, settings.weather.units);
     
     // Status
     std::string statusMsg = "Disconnected";
     
     // UI elements
-    TextInput ipInput(10, 8, 120, 24, "10.0.0.34", font);
+    TextInput ipInput(10, 8, 120, 24, settings.network.espIP, font);
     Button connectBtn(140, 8, 90, 24, "Connect", font);
     connectBtn.setColor(sf::Color(100, 255, 100), sf::Color(150, 255, 150));
     
@@ -240,6 +259,11 @@ int main() {
     sf::CircleShape statusIndicator(8);
     statusIndicator.setPosition(sf::Vector2f((float)(windowWidth - 28), (float)(menuHeight / 2 - 8)));
     statusIndicator.setFillColor(sf::Color::Red);
+    sf::CircleShape statusIndicatorBorder(8);
+    statusIndicatorBorder.setPosition(sf::Vector2f((float)(windowWidth - 28), (float)(menuHeight / 2 - 8)));
+    statusIndicatorBorder.setOutlineColor(sf::Color::Black);
+    statusIndicatorBorder.setOutlineThickness(1);
+    statusIndicatorBorder.setFillColor(sf::Color::Transparent);
     
     // Preview sprite
     sf::Sprite previewSprite(qualiaTexture.getTexture());
@@ -305,7 +329,8 @@ int main() {
                 statusIndicator.setFillColor(sf::Color::Red);
             } else {
                 statusMsg = "Connecting...";
-                if (connection.connect(ipInput.value)) {
+                if (connection.connect(ipInput.value, settings.network.espPort)) {
+                    settings.network.espIP = ipInput.value;
                     connected = true;
                     statusMsg = "Connected to " + ipInput.value;
                     connectBtn.setLabel("Disconnect");
@@ -320,7 +345,8 @@ int main() {
         
         // Get system stats and draw to texture
         SystemStats stats = monitor.getStats();
-        skins[skinIndex]->draw(qualiaTexture, stats);
+        WeatherData weather = weatherMonitor.getWeather();
+        skins[skinName]->draw(qualiaTexture, stats, weather);
         
         // Queue frame for sending (non-blocking)
         if (connected && sendClock.getElapsedTime().asSeconds() >= sendInterval) {
@@ -340,6 +366,7 @@ int main() {
         ipInput.draw(window);
         connectBtn.draw(window);
         window.draw(statusIndicator);
+        window.draw(statusIndicatorBorder);
         
         // Preview (rotated 90 degrees)
         window.draw(previewBorder);
@@ -362,6 +389,8 @@ int main() {
         
         window.display();
     }
+
+    settings.save();
     
     // Clean shutdown
     if (connected) {

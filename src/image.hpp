@@ -1,5 +1,3 @@
-// qualia_display.hpp
-// Windows-only Qualia display library
 #pragma once
 
 #include <cstdint>

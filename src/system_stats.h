@@ -36,6 +36,8 @@ public:
         
         // Ryzen Master SDK setup
         initRyzenSDK();
+
+        std::cout << "SystemMonitor initialized successfully\n";
     }
     
     ~SystemMonitor() {
@@ -72,6 +74,7 @@ public:
                     std::cout << "Failed to get CPU parameters from Ryzen SDK\n";
                 }
             }
+            // std::cout << "Updated CPU stats: " << cachedCpuPercent_ << "%, " << cachedCpuTemp_ << "C\n";
             
             lastCollectTime_ = now;
         }

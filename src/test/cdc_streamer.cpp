@@ -1,8 +1,5 @@
 // main.cpp
 // System monitor for Qualia display (Windows) - Console version
-//
-// Build with MinGW:
-//   g++ -o qualia_monitor.exe main.cpp -std=c++17 -lpdh
 
 #include "image.hpp"
 #include "serial_port.h"

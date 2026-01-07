@@ -1,8 +1,6 @@
 // wifi_throughput_test.cpp
 // Test WiFi throughput for Qualia display
 // Connects to Qualia TCP server and sends frames
-//
-// Build: g++ -o wifi_throughput_test.exe wifi_throughput_test.cpp -std=c++17 -lws2_32
 
 #include <winsock2.h>
 #include <ws2tcpip.h>

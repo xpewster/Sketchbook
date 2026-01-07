@@ -1,8 +1,6 @@
 // msc_throughput_test.cpp
 // Test mass storage throughput for Qualia display
 // Just writes frames to CIRCUITPY drive as fast as possible
-//
-// Build: g++ -o msc_throughput_test.exe msc_throughput_test.cpp -std=c++17
 
 #include <windows.h>
 #include <iostream>

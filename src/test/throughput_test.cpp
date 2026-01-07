@@ -1,7 +1,5 @@
 // throughput_test.cpp
 // Blast data to serial port to test raw USB throughput
-//
-// Build: g++ -o throughput_test.exe throughput_test.cpp -std=c++17
 
 #include <windows.h>
 #include <iostream>
