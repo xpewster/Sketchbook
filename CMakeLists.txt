@@ -56,3 +56,8 @@ target_link_libraries(Sketchbook PRIVATE
 # set_target_properties(Sketchbook PROPERTIES WIN32_EXECUTABLE TRUE) # Set to false for debugging console output
 set_target_properties(Sketchbook PROPERTIES LINK_FLAGS "/MANIFESTUAC:\"level='requireAdministrator' uiAccess='false'\"")
 
+add_custom_target(copy_assets
+    COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_CURRENT_LIST_DIR}/resources ${CMAKE_CURRENT_BINARY_DIR}/bin/Release/resources
+)
+add_dependencies(Sketchbook copy_assets)
+

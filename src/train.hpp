@@ -99,13 +99,21 @@ private:
             std::string nextHeadsign = "No data";
             
             for (const auto& arrival : arrivals) {
-                // Get predicted or scheduled time
-                int64_t predictedTime = arrival.value("predictedArrivalTime", 0);
-                int64_t scheduledTime = arrival.value("scheduledArrivalTime", 0);
-                int64_t arrivalTime = (predictedTime > 0) ? predictedTime : scheduledTime;
+                if (!arrival.value("predicted", false)) {
+                    continue; // Skip non-predicted (scheduled) arrivals
+                }
+
+                // Get predicted time
+                int64_t predictedTime = arrival["predictedArrivalTime"].get<int64_t>();
+                int64_t arrivalTime = (predictedTime > 0) ? predictedTime : 0;
                 
                 // Calculate minutes
                 float mins = (arrivalTime - currentTime) / 60000.0f;
+
+                std::cout << "Arrival found for stop " << stopIndex 
+                          << ": predictedTime=" << predictedTime 
+                          << ", currentTime=" << currentTime 
+                          << ", mins=" << mins << "\n";
                 
                 // Only consider upcoming trains (>= 0 minutes)
                 if (mins >= 0 && mins < minMinutes) {

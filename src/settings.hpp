@@ -33,6 +33,9 @@ public:
     struct Preferences {
         std::string selectedSkin = "Debug";
         bool rotate180 = false;
+        bool showDirtyRects = true;
+        bool frameLock = true;
+        bool flashMode = false;
     };
 
     struct TrainConfig {
@@ -67,6 +70,9 @@ public:
             if (auto prefTable = config["preferences"].as_table()) {
                 preferences.selectedSkin = (*prefTable)["selected_skin"].value_or("Debug");
                 preferences.rotate180 = (*prefTable)["rotate_180"].value_or(false);
+                preferences.showDirtyRects = (*prefTable)["show_dirty_rects"].value_or(true);
+                preferences.frameLock = (*prefTable)["frame_lock"].value_or(true);
+                preferences.flashMode = (*prefTable)["flash_mode"].value_or(false);
             }
             
             // Parse weather settings
@@ -138,7 +144,10 @@ public:
 
             config.insert_or_assign("preferences", toml::table{
                 {"selected_skin", preferences.selectedSkin},
-                {"rotate_180", preferences.rotate180}
+                {"rotate_180", preferences.rotate180},
+                {"show_dirty_rects", preferences.showDirtyRects},
+                {"frame_lock", preferences.frameLock},
+                {"flash_mode", preferences.flashMode}
             });
 
             config.insert_or_assign("train", toml::table{
@@ -191,7 +200,8 @@ private:
 
         config.insert_or_assign("preferences", toml::table{
             {"selected_skin", "Debug"},
-            {"rotate_180", false}
+            {"rotate_180", false},
+            {"show_dirty_rects", true}
         });
 
         config.insert_or_assign("train", toml::table{

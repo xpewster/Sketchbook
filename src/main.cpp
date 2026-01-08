@@ -1,6 +1,7 @@
 #define UNICODE
 
 #include <winsock2.h>
+#include <locale.h>
 
 #include "system_stats.h"
 #include "image.hpp"
@@ -22,6 +23,7 @@
 #include "ui/text_box.cpp"
 #include "ui/button.cpp"
 #include "ui/dropdown.cpp"
+#include "ui/checkbox.cpp"
 #include "skins/skin.h"
 #include "skins/debug_skin.cpp"
 #include "skins/anime_skin.cpp"
@@ -310,6 +312,7 @@ int main() {
         std::cout << "This application must be run as administrator.\n";
         return 1;
     }
+    setlocale(LC_ALL, "");
 
     std::cout << "Starting Sketchbook...\n";
 
@@ -344,7 +347,8 @@ int main() {
     }
 
     std::unordered_map<std::string, Skin*> skins;
-    std::string skinName = "Debug";
+    std::string skinName = settings.preferences.selectedSkin;
+    std::cout << "Selected skin: " << skinName << "\n";
     DebugSkin debugSkin = DebugSkin(std::string("Debug"), qualia::DISPLAY_HEIGHT, qualia::DISPLAY_WIDTH);
     debugSkin.initialize("");
     skins["Debug"] = &debugSkin;
@@ -383,7 +387,22 @@ int main() {
     for (const auto& pair : skins) {
         skinOptions.push_back(pair.first);
     }
-    DropdownSelector skinDropdown(240, 8, 120, 24, skinOptions, font);
+    int defaultSkinIndex = 0;
+    for (size_t i = 0; i < skinOptions.size(); ++i) {
+        if (skinOptions[i] == skinName) {
+            defaultSkinIndex = static_cast<int>(i);
+            break;
+        }
+    }
+    DropdownSelector skinDropdown(240, 8, 120, 24, skinOptions, font, defaultSkinIndex);
+    Button refreshBtn(370, 8, 24, 24, "", font);
+    sf::Texture refreshIconTexture;
+    refreshBtn.setColor(sf::Color(252, 186, 3), sf::Color(252, 205, 76));
+    refreshBtn.setIcon("resources/Refresh.png", 0, 0, 24, 24);
+    Checkbox frameLockCB(400, 8, 12, "Frame lock", font, 4, -2, settings.preferences.frameLock);
+    Checkbox flashModeCB(400, 24, 12, "Flash mode", font, 4, -2, settings.preferences.flashMode);
+    Checkbox dirtyRectCB((float)(windowWidth - 150), (float)(windowHeight - 22), 12, "Show dirty rects", font, 4, -2, settings.preferences.showDirtyRects);
+    dirtyRectCB.setLabelColor(sf::Color::White);
     
     // Status indicator
     sf::CircleShape statusIndicator(8);
@@ -435,6 +454,13 @@ int main() {
             ipInput.handleEvent(*event, mousePos, window);
             skinDropdown.handleEvent(*event, mousePos, window);
             skinName = skinDropdown.getSelectedValue();
+            settings.preferences.selectedSkin = skinName;
+            dirtyRectCB.handleEvent(*event, mousePos, window);
+            settings.preferences.showDirtyRects = dirtyRectCB.isChecked();
+            frameLockCB.handleEvent(*event, mousePos, window);
+            settings.preferences.frameLock = frameLockCB.isChecked();
+            flashModeCB.handleEvent(*event, mousePos, window);
+            settings.preferences.flashMode = flashModeCB.isChecked();
         }
         
         // Check for send errors from background thread
@@ -472,6 +498,13 @@ int main() {
                 } else {
                     statusMsg = "Connection failed";
                 }
+            }
+        }
+
+        if (refreshBtn.update(mousePos, mousePressed, window)) {
+            // Force refresh skin parameters
+            for (auto& pair : skins) {
+                pair.second->initialize(pair.second->xmlFilePath);
             }
         }
         
@@ -527,11 +560,14 @@ int main() {
         ipInput.draw(window);
         connectBtn.draw(window);
         skinDropdown.draw(window);
+        refreshBtn.draw(window);
+        frameLockCB.draw(window);
+        flashModeCB.draw(window);
         window.draw(statusIndicator);
         window.draw(statusIndicatorBorder);
 
-        // Debugging: show dirty rectangles on preview
-        if (connected) {
+        // Show dirty rectangles on preview
+        if (connected && settings.preferences.showDirtyRects) {
             std::vector<qualia::DirtyRect> dirtyRects = sender.getLastDirtyRects();
             for (const auto& rect : dirtyRects) {
                 // Need to unrotate
@@ -561,6 +597,7 @@ int main() {
         
         // Status bar
         window.draw(statusText);
+        dirtyRectCB.draw(window);
         
         window.display();
     }

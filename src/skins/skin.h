@@ -11,8 +11,7 @@
 
 class Skin {
 private:
-    std::string name;
-
+    
 protected:
     sf::Font font;
     const int DISPLAY_WIDTH;
@@ -21,12 +20,18 @@ protected:
     std::vector<sf::Font*> fonts;
     unsigned long frameCount = 0;
     std::string baseSkinDir;
+    bool parametersRefreshed = false;
 
 public:
+    std::string name;
+    std::string xmlFilePath;
 
     Skin(std::string name, int width, int height) : name(name), DISPLAY_WIDTH(width), DISPLAY_HEIGHT(height) {} 
 
     int initialize(const std::string& xmlFilePath) {
+        this->xmlFilePath = xmlFilePath;
+        parameters.clear();
+        fonts.clear();
         if (!font.openFromFile("C:/Windows/Fonts/times.ttf")) {
             std::cerr << "Failed to load font\n";
             return 1;
@@ -40,6 +45,7 @@ public:
                 return 1;
             }
         }
+        parametersRefreshed = true;
         return 0;
     }
 

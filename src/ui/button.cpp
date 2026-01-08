@@ -1,5 +1,7 @@
 #include <SFML/Graphics.hpp>
 #include <string>
+#include <iostream>
+#include <optional>
 
 class Button {
 public:
@@ -7,6 +9,8 @@ public:
     sf::Text text;
     sf::Color normalColor;
     sf::Color hoverColor;
+    sf::Texture iconTex;
+    std::optional<sf::Sprite> icon;
     
     Button(float x, float y, float w, float h, const std::string& label, sf::Font& font)
         : text(font, label, 14) {
@@ -32,6 +36,16 @@ public:
         normalColor = normal;
         hoverColor = hover;
     }
+
+    void setIcon(const std::string& filepath, float x, float y, float w, float h) {
+        if (!iconTex.loadFromFile(filepath)) {
+            return; 
+        }
+        icon.emplace(iconTex);
+        sf::Vector2f pos = shape.getPosition();
+        icon->setScale(sf::Vector2f(w / iconTex.getSize().x, h / iconTex.getSize().y));
+        icon->setPosition(sf::Vector2f(pos.x + x, pos.y + y));
+    }
     
     bool update(sf::Vector2i mousePos, bool mousePressed, sf::RenderWindow& window) {
         bool hover = shape.getGlobalBounds().contains(window.mapPixelToCoords(mousePos));
@@ -42,6 +56,9 @@ public:
     void draw(sf::RenderWindow& window) {
         window.draw(shape);
         window.draw(text);
+        if (icon.has_value()) {
+            window.draw(*icon);
+        }
     }
 
 private:

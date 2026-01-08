@@ -203,13 +203,19 @@ private:
     sf::Color getParamColor(const std::string& key, sf::Color defaultVal = sf::Color::White) {
         auto it = parameters.find(key);
         if (it != parameters.end()) {
+            std::string hexStr = it->second;
+            if (it->second[0] == '#') {
+                hexStr = it->second.substr(1);
+            }
             try {
-                unsigned int hex = std::stoul(it->second, nullptr, 16);
+                unsigned int hex = std::stoul(hexStr, nullptr, 16);
                 return sf::Color((hex >> 16) & 0xFF, (hex >> 8) & 0xFF, hex & 0xFF);
             } catch (...) {
+                std::cout << "Invalid color for key " << key << ": " << it->second << "\n";
                 return defaultVal;
             }
         }
+        std::cout << "Color key not found: " << key << "\n";
         return defaultVal;
     }
 
@@ -250,8 +256,14 @@ private:
     }
 
     void loadResources() {
-        if (initialized) return;
+        if (initialized && !parametersRefreshed) return;
         initialized = true;
+        if (parametersRefreshed) {
+            std::cout << "Refreshing skin parameters...\n";
+            backgroundFrames.clear();
+            characterFrames.clear();
+        }
+        parametersRefreshed = false;
 
         // Load background frames
         backgroundAnimated = getParamBool("skin.background.animation.enabled", false);
@@ -309,7 +321,7 @@ private:
             hasCharacter = !characterFrames.empty();
         }
 
-        std::string charHotPath = getParam("skin.character.hot.png");
+        std::string charHotPath = baseSkinDir + "/" + getParam("skin.character.hot.png");
         if (!charHotPath.empty()) {
             hasCharacterHot = characterHotTexture.loadFromFile(charHotPath);
         }
@@ -499,7 +511,7 @@ public:
             sf::Font* weatherFont = getFont(weatherTextFontIndex);
             if (weatherFont) {
                 char weatherStr[64];
-                snprintf(weatherStr, sizeof(weatherStr), "%.0f°F", weather.currentTemp);
+                snprintf(weatherStr, sizeof(weatherStr), "%.0f\u00B0F", weather.currentTemp);
                 sf::Text weatherText(*weatherFont, weatherStr, weatherTextSize);
                 weatherText.setPosition(sf::Vector2f(weatherTextX, weatherTextY));
                 weatherText.setFillColor(weatherTextColor);
@@ -513,7 +525,7 @@ public:
             if (hwmonFont) {
                 char cpuStr[64];
                 if (cpuCombine) {
-                    snprintf(cpuStr, sizeof(cpuStr), "CPU: %.0f%% / %.0f°C", stats.cpuPercent, stats.cpuTempC);
+                    snprintf(cpuStr, sizeof(cpuStr), "CPU: %.0f%% / %.0f\u00B0C", stats.cpuPercent, stats.cpuTempC);
                 } else {
                     snprintf(cpuStr, sizeof(cpuStr), "CPU: %.0f%%", stats.cpuPercent);
                 }
@@ -529,7 +541,7 @@ public:
             sf::Font* hwmonFont = getFont(hwmonTextFontIndex);
             if (hwmonFont) {
                 char tempStr[64];
-                snprintf(tempStr, sizeof(tempStr), "Temp: %.0f°C", stats.cpuTempC);
+                snprintf(tempStr, sizeof(tempStr), "Temp: %.0f\u00B0C", stats.cpuTempC);
                 sf::Text tempText(*hwmonFont, tempStr, cpuTempTextSize);
                 tempText.setPosition(sf::Vector2f(cpuTempTextX, cpuTempTextY));
                 tempText.setFillColor(cpuTempTextColor);
