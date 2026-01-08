@@ -1,3 +1,5 @@
+#pragma once
+
 #include <SFML/Graphics.hpp>
 #include <string>
 #include <iostream>
@@ -31,6 +33,10 @@ public:
         text.setString(label);
         centerText();
     }
+
+    void setLabelColor(sf::Color color) {
+        text.setFillColor(color);
+    }
     
     void setColor(sf::Color normal, sf::Color hover) {
         normalColor = normal;
@@ -59,6 +65,10 @@ public:
         if (icon.has_value()) {
             window.draw(*icon);
         }
+    }
+
+    sf::Vector2f getSize() const {
+        return shape.getSize();
     }
 
 private:

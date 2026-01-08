@@ -28,6 +28,7 @@ public:
     struct NetworkConfig {
         std::string espIP = "192.168.1.100";
         int espPort = 8080;
+        std::string espDrive; // e.g. "E:"
     };
 
     struct Preferences {
@@ -36,6 +37,7 @@ public:
         bool showDirtyRects = true;
         bool frameLock = true;
         bool flashMode = false;
+        bool frameLockRealTimePreview = false;
     };
 
     struct TrainConfig {
@@ -73,6 +75,7 @@ public:
                 preferences.showDirtyRects = (*prefTable)["show_dirty_rects"].value_or(true);
                 preferences.frameLock = (*prefTable)["frame_lock"].value_or(true);
                 preferences.flashMode = (*prefTable)["flash_mode"].value_or(false);
+                preferences.frameLockRealTimePreview = (*prefTable)["frame_lock_real_time_preview"].value_or(false);
             }
             
             // Parse weather settings
@@ -95,6 +98,7 @@ public:
             if (auto networkTable = config["network"].as_table()) {
                 network.espIP = (*networkTable)["esp_ip"].value_or("192.168.1.100");
                 network.espPort = (*networkTable)["esp_port"].value_or(8080);
+                network.espDrive = (*networkTable)["esp_drive"].value_or("");
             }
 
             if (auto trainTable = config["train"].as_table()) {
@@ -140,6 +144,7 @@ public:
             config.insert_or_assign("network", toml::table{
                 {"esp_ip", network.espIP},
                 {"esp_port", network.espPort},
+                {"esp_drive", network.espDrive}
             });
 
             config.insert_or_assign("preferences", toml::table{
@@ -147,7 +152,8 @@ public:
                 {"rotate_180", preferences.rotate180},
                 {"show_dirty_rects", preferences.showDirtyRects},
                 {"frame_lock", preferences.frameLock},
-                {"flash_mode", preferences.flashMode}
+                {"flash_mode", preferences.flashMode},
+                {"frame_lock_real_time_preview", preferences.frameLockRealTimePreview}
             });
 
             config.insert_or_assign("train", toml::table{

@@ -24,6 +24,7 @@
 #include "ui/button.cpp"
 #include "ui/dropdown.cpp"
 #include "ui/checkbox.cpp"
+#include "ui/info.cpp"
 #include "skins/skin.h"
 #include "skins/debug_skin.cpp"
 #include "skins/anime_skin.cpp"
@@ -400,9 +401,18 @@ int main() {
     refreshBtn.setColor(sf::Color(252, 186, 3), sf::Color(252, 205, 76));
     refreshBtn.setIcon("resources/Refresh.png", 0, 0, 24, 24);
     Checkbox frameLockCB(400, 8, 12, "Frame lock", font, 4, -2, settings.preferences.frameLock);
+    InfoIcon frameLockInfo(485, 8, 15, "resources/Info.png", "When enabled, the sender thread will wait for the remote device to finish processing each frame before progressing the animation. This prevents frame drops and tearing at the expense of slower animation.", font);
     Checkbox flashModeCB(400, 24, 12, "Flash mode", font, 4, -2, settings.preferences.flashMode);
+    InfoIcon flashModeInfo(485, 22, 15, "resources/Info.png", "When enabled, the program will only send raw data and selected image streaming to the remote device. The rest of the image will have to be flashed to the remote device along with any relevant config and developed there.", font);
     Checkbox dirtyRectCB((float)(windowWidth - 150), (float)(windowHeight - 22), 12, "Show dirty rects", font, 4, -2, settings.preferences.showDirtyRects);
     dirtyRectCB.setLabelColor(sf::Color::White);
+    TextInput flashDriveInput(400, 176, 40, 24, settings.network.espDrive, font);
+    Button flashBtn(450, 176, 90, 24, "MemFlash", font);
+    flashBtn.setColor(sf::Color(0, 64, 255), sf::Color(54, 99, 235));
+    flashBtn.setLabelColor(sf::Color::White);
+    flashModeInfo.setExtraHeight(30);
+    flashModeInfo.enableHoverOverBox(true);
+    Checkbox realtimeCB((float)(windowWidth - 280), (float)(windowHeight - 22), 12, "Real-time preview", font, 4, -2, settings.preferences.frameLockRealTimePreview);
     
     // Status indicator
     sf::CircleShape statusIndicator(8);
@@ -461,6 +471,19 @@ int main() {
             settings.preferences.frameLock = frameLockCB.isChecked();
             flashModeCB.handleEvent(*event, mousePos, window);
             settings.preferences.flashMode = flashModeCB.isChecked();
+            frameLockInfo.handleEvent(*event, mousePos, window);
+            flashModeInfo.handleEvent(*event, mousePos, window);
+            if (flashModeInfo.isHovered()) {
+                if (flashBtn.update(mousePos, mousePressed, window)) {
+                    // Todo 
+                }
+                flashDriveInput.handleEvent(*event, mousePos, window);
+                settings.network.espDrive = flashDriveInput.value;
+            }
+            if (frameLockCB.isChecked()) {
+                realtimeCB.handleEvent(*event, mousePos, window);
+                settings.preferences.frameLockRealTimePreview = realtimeCB.isChecked();
+            }
         }
         
         // Check for send errors from background thread
@@ -563,6 +586,12 @@ int main() {
         refreshBtn.draw(window);
         frameLockCB.draw(window);
         flashModeCB.draw(window);
+        flashModeInfo.draw(window);
+        frameLockInfo.draw(window);
+        if (settings.preferences.flashMode && flashModeInfo.isHovered()) {
+            flashDriveInput.draw(window);
+            flashBtn.draw(window);
+        }
         window.draw(statusIndicator);
         window.draw(statusIndicatorBorder);
 
@@ -597,6 +626,9 @@ int main() {
         
         // Status bar
         window.draw(statusText);
+        if (frameLockCB.isChecked()) {
+            realtimeCB.draw(window);
+        }
         dirtyRectCB.draw(window);
         
         window.display();

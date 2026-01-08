@@ -109,11 +109,6 @@ private:
                 
                 // Calculate minutes
                 float mins = (arrivalTime - currentTime) / 60000.0f;
-
-                std::cout << "Arrival found for stop " << stopIndex 
-                          << ": predictedTime=" << predictedTime 
-                          << ", currentTime=" << currentTime 
-                          << ", mins=" << mins << "\n";
                 
                 // Only consider upcoming trains (>= 0 minutes)
                 if (mins >= 0 && mins < minMinutes) {
