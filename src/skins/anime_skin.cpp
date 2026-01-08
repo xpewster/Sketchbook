@@ -219,9 +219,15 @@ private:
         return defaultVal;
     }
 
-    float getBobOffset(float speed, float amplitude = 5.0f) {
-        float time = frameCount / 60.0f; // Assuming ~60 FPS
+    // Time-based bobbing offset calculation
+    float getBobOffset(double time, float speed, float amplitude = 5.0f) {
         return std::sin(time * speed * 2.0f * 3.14159f) * amplitude;
+    }
+
+    // Legacy frame-based bobbing (for backward compatibility)
+    float getBobOffset(float speed, float amplitude = 5.0f) {
+        float time = frameCount / 60.0f;
+        return getBobOffset(time, speed, amplitude);
     }
 
     sf::Texture* getWeatherIcon(const WeatherData& weather) {
@@ -417,10 +423,8 @@ private:
         return fonts.empty() ? nullptr : fonts[0];
     }
 
-public:
-    AnimeSkin(std::string name, int width, int height) : Skin(name, width, height) {}
-
-    void draw(sf::RenderTexture& texture, SystemStats& stats, WeatherData& weather, TrainData& train) override {
+    // Internal draw implementation that takes explicit animation time
+    void drawWithTime(sf::RenderTexture& texture, SystemStats& stats, WeatherData& weather, TrainData& train, double animTime) {
         loadResources();
 
         texture.clear(sf::Color::Black);
@@ -429,8 +433,8 @@ public:
         if (!backgroundFrames.empty()) {
             int bgFrame = 0;
             if (backgroundAnimated && backgroundFrames.size() > 1) {
-                float framesPerTick = backgroundAnimSpeed / 60.0f;
-                bgFrame = (int)(frameCount * framesPerTick) % (int)backgroundFrames.size();
+                // Time-based frame selection: animTime * fps = frame number
+                bgFrame = (int)(animTime * backgroundAnimSpeed) % (int)backgroundFrames.size();
             }
             sf::Sprite bgSprite(backgroundFrames[bgFrame]);
             
@@ -454,8 +458,8 @@ public:
             } else if (!characterFrames.empty()) {
                 int charFrame = 0;
                 if (characterAnimated && characterFrames.size() > 1) {
-                    float framesPerTick = characterAnimSpeed / 60.0f;
-                    charFrame = (int)(frameCount * framesPerTick) % (int)characterFrames.size();
+                    // Time-based frame selection
+                    charFrame = (int)(animTime * characterAnimSpeed) % (int)characterFrames.size();
                 }
                 charTex = &characterFrames[charFrame];
             }
@@ -467,7 +471,7 @@ public:
                 float posY = characterY;
                 
                 if (characterBobbing) {
-                    posY += getBobOffset(characterBobbingSpeed);
+                    posY += getBobOffset(animTime, characterBobbingSpeed);
                 }
 
                 if (characterFlip) {
@@ -492,7 +496,7 @@ public:
                 float posY = weatherIconY;
                 
                 if (weatherIconBobbing) {
-                    posY += getBobOffset(weatherIconBobbingSpeed);
+                    posY += getBobOffset(animTime, weatherIconBobbingSpeed);
                 }
 
                 // Scale to specified size
@@ -585,7 +589,23 @@ public:
             }
         }
 
-        frameCount++;
         texture.display();
+    }
+
+public:
+    AnimeSkin(std::string name, int width, int height) : Skin(name, width, height) {}
+
+    // Original draw method - uses internal frame counter for backward compatibility
+    void draw(sf::RenderTexture& texture, SystemStats& stats, WeatherData& weather, TrainData& train) override {
+        // Convert frame count to time (assuming ~60 FPS internal rate)
+        double animTime = frameCount / 60.0;
+        drawWithTime(texture, stats, weather, train, animTime);
+        frameCount++;
+    }
+
+    // New draw method with explicit animation time (for frame lock support)
+    void draw(sf::RenderTexture& texture, SystemStats& stats, WeatherData& weather, TrainData& train, double animationTime) {
+        drawWithTime(texture, stats, weather, train, animationTime);
+        // Note: frameCount not incremented when using explicit time
     }
 };

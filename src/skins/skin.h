@@ -49,7 +49,14 @@ public:
         return 0;
     }
 
+    // Original draw method - uses internal frame counter
     virtual void draw(sf::RenderTexture& texture, SystemStats& stats, WeatherData& weather, TrainData& train) = 0;
+
+    // Draw method with explicit animation time (for frame lock support)
+    // Default implementation calls the original draw method for backward compatibility
+    virtual void draw(sf::RenderTexture& texture, SystemStats& stats, WeatherData& weather, TrainData& train, double animationTime) {
+        draw(texture, stats, weather, train);
+    }
 
     virtual ~Skin() = default;
 };

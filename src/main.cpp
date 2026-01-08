@@ -113,11 +113,12 @@ private:
     SOCKET sock_;
 };
 
-// Threaded frame sender
+// Threaded frame sender with frame lock support
 class FrameSender {
 public:
     FrameSender(int fpsWindow = 10) 
-        : running_(false), frameReady_(false), sendError_(false), fpsWindow_(fpsWindow) {}
+        : running_(false), frameReady_(false), sendError_(false), fpsWindow_(fpsWindow),
+          frameConsumed_(false) {}
     
     ~FrameSender() {
         stop();
@@ -127,6 +128,7 @@ public:
         connection_ = conn;
         running_ = true;
         sendError_ = false;
+        frameConsumed_ = false;
         dirtyTracker_.invalidate();  // Reset tracker on new connection
         sendThread_ = std::thread(&FrameSender::sendLoop, this);
     }
@@ -151,6 +153,20 @@ public:
             frameReady_ = true;
         }
         cv_.notify_one();
+    }
+    
+    // Check if sender is ready for next frame (for frame lock mode)
+    bool isReadyForFrame() const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return !frameReady_;  // Ready when no pending frame
+    }
+    
+    // Check and clear the frame consumed flag (for frame lock mode)
+    bool checkAndClearFrameConsumed() {
+        std::lock_guard<std::mutex> lock(consumedMutex_);
+        bool consumed = frameConsumed_;
+        frameConsumed_ = false;
+        return consumed;
     }
     
     // Get current FPS (thread-safe)
@@ -213,6 +229,12 @@ private:
                 frameReady_ = false;
                 lock.unlock();
                 
+                // Signal that we've consumed the frame (for frame lock)
+                {
+                    std::lock_guard<std::mutex> consumedLock(consumedMutex_);
+                    frameConsumed_ = true;
+                }
+                
                 // Find dirty rectangles
                 auto rects = dirtyTracker_.findDirtyRects(frameToSend);
                 
@@ -246,12 +268,16 @@ private:
     
     TcpConnection* connection_ = nullptr;
     std::thread sendThread_;
-    std::mutex mutex_;
+    mutable std::mutex mutex_;
     std::condition_variable cv_;
     qualia::Image pendingFrame_;
     std::atomic<bool> running_;
     std::atomic<bool> frameReady_;
     std::atomic<bool> sendError_;
+    
+    // Frame consumed signaling (for frame lock)
+    mutable std::mutex consumedMutex_;
+    bool frameConsumed_;
     
     // Dirty rect tracker
     qualia::DirtyRectTracker dirtyTracker_;
@@ -267,6 +293,65 @@ private:
     float lastCompressionRatio_ = 1.0f;
     int lastRectCount_ = 0;
     size_t lastPacketSize_ = 0;
+};
+
+// Frame lock controller - manages animation timing when frame lock is enabled
+class FrameLockController {
+public:
+    FrameLockController(double targetFPS = 20.0) 
+        : targetFPS_(targetFPS), frameBudget_(1.0 / targetFPS),
+          lockedTime_(0.0), budgetRemaining_(0.0), wallTime_(0.0),
+          lastUpdateTime_(std::chrono::steady_clock::now()) {}
+    
+    // Call once per main loop iteration to update timing
+    void update() {
+        auto now = std::chrono::steady_clock::now();
+        double deltaWall = std::chrono::duration<double>(now - lastUpdateTime_).count();
+        lastUpdateTime_ = now;
+        
+        // Always track wall time for real-time preview
+        wallTime_ += deltaWall;
+        
+        // Advance locked time within budget
+        double advance = min(deltaWall, budgetRemaining_);
+        lockedTime_ += advance;
+        budgetRemaining_ = max(0.0, budgetRemaining_ - deltaWall);
+    }
+    
+    // Call when sender consumes a frame - replenishes the time budget
+    void onFrameConsumed() {
+        budgetRemaining_ = frameBudget_;
+    }
+    
+    // Get animation time for locked (sent) frames
+    double getLockedTime() const { return lockedTime_; }
+    
+    // Get animation time for real-time preview (wall clock)
+    double getWallTime() const { return wallTime_; }
+    
+    // Check if animation is currently frozen (budget exhausted)
+    bool isFrozen() const { return budgetRemaining_ <= 0.0; }
+    
+    // Reset state (e.g., on new connection)
+    void reset() {
+        lockedTime_ = 0.0;
+        budgetRemaining_ = frameBudget_;
+        wallTime_ = 0.0;
+        lastUpdateTime_ = std::chrono::steady_clock::now();
+    }
+    
+    void setTargetFPS(double fps) {
+        targetFPS_ = fps;
+        frameBudget_ = 1.0 / fps;
+    }
+    
+private:
+    double targetFPS_;
+    double frameBudget_;      // Time budget per frame (1/targetFPS)
+    double lockedTime_;       // Animation time for locked frames
+    double budgetRemaining_;  // Time budget remaining before freeze
+    double wallTime_;         // Real wall-clock time for preview
+    std::chrono::steady_clock::time_point lastUpdateTime_;
 };
 
 // Convert RenderTexture to RGB565 for Qualia
@@ -360,6 +445,9 @@ int main() {
     // Create render texture at Qualia's native resolution
     sf::RenderTexture qualiaTexture(sf::Vector2u(qualia::DISPLAY_HEIGHT, qualia::DISPLAY_WIDTH)); // Swapped dimensions for 90 degree rotation
     
+    // Secondary texture for frame lock with real-time preview (renders the locked frame for sending)
+    sf::RenderTexture lockedTexture(sf::Vector2u(qualia::DISPLAY_HEIGHT, qualia::DISPLAY_WIDTH));
+    
     // RGB565 image buffer for sending
     qualia::Image frameBuffer(qualia::DISPLAY_WIDTH, qualia::DISPLAY_HEIGHT);
     
@@ -367,6 +455,9 @@ int main() {
     TcpConnection connection;
     FrameSender sender;
     bool connected = false;
+    
+    // Frame lock controller
+    FrameLockController frameLock(20.0);  // Target 20 FPS
     
     // System monitor
     SystemMonitor monitor;
@@ -447,6 +538,9 @@ int main() {
     sf::Clock sendClock;
     const float sendInterval = 0.05f;  // ~20 FPS target
     
+    // Wall clock for non-frame-lock animation
+    auto startTime = std::chrono::steady_clock::now();
+    
     while (window.isOpen()) {
         // Handle events
         bool mousePressed = false;
@@ -518,6 +612,7 @@ int main() {
                     connectBtn.setColor(sf::Color(255, 100, 100), sf::Color(255, 150, 150));
                     statusIndicator.setFillColor(sf::Color::Green);
                     sender.start(&connection);
+                    frameLock.reset();  // Reset frame lock timing on new connection
                 } else {
                     statusMsg = "Connection failed";
                 }
@@ -531,29 +626,86 @@ int main() {
             }
         }
         
-        // Get system stats and draw to texture
+        // Update frame lock controller
+        frameLock.update();
+        
+        // Check if sender consumed a frame (for frame lock)
+        if (connected && settings.preferences.frameLock && sender.checkAndClearFrameConsumed()) {
+            frameLock.onFrameConsumed();
+        }
+        
+        // Get system stats
         SystemStats stats = monitor.getStats();
         WeatherData weather = weatherMonitor.getWeather();
         TrainData train = trainMonitor.getTrain();
-        skins[skinName]->draw(qualiaTexture, stats, weather, train);
         
-        // Queue frame for sending (non-blocking)
-        if (connected && sendClock.getElapsedTime().asSeconds() >= sendInterval) {
-            // Rotate texture 90 degrees and convert to RGB565 in one step while copying to frame buffer
-            sendClock.restart();
-            if (settings.preferences.rotate180) {
-                textureToRGB565RotNeg90(qualiaTexture, frameBuffer);
-            } else {
-                textureToRGB565Rot90(qualiaTexture, frameBuffer);
-            }
-            sender.queueFrame(frameBuffer);
+        // Calculate animation time based on mode
+        double wallAnimTime = std::chrono::duration<double>(std::chrono::steady_clock::now() - startTime).count();
+        
+        // Draw to texture based on frame lock settings
+        if (connected && settings.preferences.frameLock) {
+            double lockedAnimTime = frameLock.getLockedTime();
             
-            // Show compression stats
+            if (settings.preferences.frameLockRealTimePreview) {
+                // Real-time preview mode: draw twice
+                // 1. Draw with wall time for preview display
+                skins[skinName]->draw(qualiaTexture, stats, weather, train, wallAnimTime);
+                
+                // 2. Draw with locked time for sending (only when ready to send)
+                if (sendClock.getElapsedTime().asSeconds() >= sendInterval && sender.isReadyForFrame()) {
+                    skins[skinName]->draw(lockedTexture, stats, weather, train, lockedAnimTime);
+                    sendClock.restart();
+                    if (settings.preferences.rotate180) {
+                        textureToRGB565RotNeg90(lockedTexture, frameBuffer);
+                    } else {
+                        textureToRGB565Rot90(lockedTexture, frameBuffer);
+                    }
+                    sender.queueFrame(frameBuffer);
+                }
+            } else {
+                // Standard frame lock: draw with locked time for both preview and send
+                skins[skinName]->draw(qualiaTexture, stats, weather, train, lockedAnimTime);
+                
+                if (sendClock.getElapsedTime().asSeconds() >= sendInterval && sender.isReadyForFrame()) {
+                    sendClock.restart();
+                    if (settings.preferences.rotate180) {
+                        textureToRGB565RotNeg90(qualiaTexture, frameBuffer);
+                    } else {
+                        textureToRGB565Rot90(qualiaTexture, frameBuffer);
+                    }
+                    sender.queueFrame(frameBuffer);
+                }
+            }
+            
+            // Show frame lock status in status message
             float ratio = sender.getCompressionRatio();
             int rects = sender.getLastRectCount();
             size_t packetKB = sender.getLastPacketSize() / 1024;
-            statusMsg = std::format("Connected | FPS: {:.1f} | {:.0f}% dirty ({} rects, {}KB)", 
-                                   sender.getFPS(), ratio * 100.0f, rects, packetKB);
+            std::string lockStatus = frameLock.isFrozen() ? " [FROZEN]" : "";
+            statusMsg = std::format("Connected | FPS: {:.1f} | {:.0f}% dirty ({} rects, {}KB){}", 
+                                   sender.getFPS(), ratio * 100.0f, rects, packetKB, lockStatus);
+        } else {
+            // No frame lock: use wall time animation, original send behavior
+            skins[skinName]->draw(qualiaTexture, stats, weather, train, wallAnimTime);
+            
+            // Queue frame for sending (non-blocking)
+            if (connected && sendClock.getElapsedTime().asSeconds() >= sendInterval) {
+                // Rotate texture 90 degrees and convert to RGB565 in one step while copying to frame buffer
+                sendClock.restart();
+                if (settings.preferences.rotate180) {
+                    textureToRGB565RotNeg90(qualiaTexture, frameBuffer);
+                } else {
+                    textureToRGB565Rot90(qualiaTexture, frameBuffer);
+                }
+                sender.queueFrame(frameBuffer);
+                
+                // Show compression stats
+                float ratio = sender.getCompressionRatio();
+                int rects = sender.getLastRectCount();
+                size_t packetKB = sender.getLastPacketSize() / 1024;
+                statusMsg = std::format("Connected | FPS: {:.1f} | {:.0f}% dirty ({} rects, {}KB)", 
+                                       sender.getFPS(), ratio * 100.0f, rects, packetKB);
+            }
         }
         
         // Update status text
