@@ -15,6 +15,8 @@
 #include <mutex>
 #include <atomic>
 #include <condition_variable>
+#include <deque>
+#include <format>
 
 #include "ui/text_box.cpp"
 #include "ui/button.cpp"
@@ -105,7 +107,8 @@ private:
 // Threaded frame sender
 class FrameSender {
 public:
-    FrameSender() : running_(false), frameReady_(false), sendError_(false) {}
+    FrameSender(int fpsWindow = 10) 
+        : running_(false), frameReady_(false), sendError_(false), fpsWindow_(fpsWindow) {}
     
     ~FrameSender() {
         stop();
@@ -140,6 +143,29 @@ public:
         cv_.notify_one();
     }
     
+    // Get current FPS (thread-safe, callable from any thread)
+    double getFPS() const {
+        std::lock_guard<std::mutex> lock(fpsMutex_);
+        
+        // Remove timestamps older than the window
+        while (!frameTimestamps_.empty()) {
+            if (frameTimestamps_.size() > fpsWindow_) {
+                frameTimestamps_.pop_front();
+            } else {
+                break;
+            }
+        }
+
+        if (frameTimestamps_.empty()) {
+            return 0.0;
+        }
+
+        auto latest = frameTimestamps_.back();
+        
+        double timeSpan = std::chrono::duration<double>(latest - frameTimestamps_.front()).count();
+        return timeSpan > 0.0 ? frameTimestamps_.size() / timeSpan : 0.0;
+    }
+    
     bool hadError() const { return sendError_; }
     void clearError() { sendError_ = false; }
     
@@ -158,11 +184,19 @@ private:
                 lock.unlock();
                 
                 // Send without holding lock
-                if (!connection_->sendFrame(toSend.data(), toSend.size())) {
+                if (connection_->sendFrame(toSend.data(), toSend.size())) {
+                    // Record successful frame send
+                    recordFrameSent();
+                } else {
                     sendError_ = true;
                 }
             }
         }
+    }
+    
+    void recordFrameSent() {
+        std::lock_guard<std::mutex> lock(fpsMutex_);
+        frameTimestamps_.push_back(std::chrono::steady_clock::now());
     }
     
     TcpConnection* connection_ = nullptr;
@@ -173,8 +207,11 @@ private:
     std::atomic<bool> running_;
     std::atomic<bool> frameReady_;
     std::atomic<bool> sendError_;
-};
 
+    const int fpsWindow_;  // Number of timestamps to keep for FPS calculation
+    mutable std::mutex fpsMutex_;
+    mutable std::deque<std::chrono::steady_clock::time_point> frameTimestamps_;
+};
 
 // Convert RenderTexture to RGB565 for Qualia
 void textureToRGB565(sf::RenderTexture& texture, qualia::Image& image) {
@@ -255,10 +292,10 @@ int main() {
 
     std::unordered_map<std::string, Skin*> skins;
     std::string skinName = "Debug";
-    DebugSkin debugSkin = DebugSkin(std::string("Debug"), qualia::DISPLAY_WIDTH, qualia::DISPLAY_HEIGHT);
+    DebugSkin debugSkin = DebugSkin(std::string("Debug"), qualia::DISPLAY_HEIGHT, qualia::DISPLAY_WIDTH);
     debugSkin.initialize("");
     skins["Debug"] = &debugSkin;
-    AnimeSkin animeSkin = AnimeSkin(std::string("Sketchbook"), qualia::DISPLAY_WIDTH, qualia::DISPLAY_HEIGHT);
+    AnimeSkin animeSkin = AnimeSkin(std::string("Sketchbook"), qualia::DISPLAY_HEIGHT, qualia::DISPLAY_WIDTH);
     animeSkin.initialize("skins/sketchbook/skin.xml");
     skins["Sketchbook"] = &animeSkin;
     
@@ -401,6 +438,7 @@ int main() {
                 textureToRGB565Rot90(qualiaTexture, frameBuffer);
             }
             sender.queueFrame(frameBuffer);
+            statusMsg = "Connected to " + ipInput.value + " | FPS: " + std::format("{:.2f}", sender.getFPS());
         }
         
         // Update status text
