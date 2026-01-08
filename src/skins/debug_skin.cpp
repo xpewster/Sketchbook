@@ -24,13 +24,13 @@ public:
         y += 30;
         
         // CPU bar background
-        sf::RectangleShape cpuBarBg(sf::Vector2f((float)(DISPLAY_WIDTH - 40), 25));
+        sf::RectangleShape cpuBarBg(sf::Vector2f((float)(400 - 40), 25));
         cpuBarBg.setPosition(sf::Vector2f(20, (float)y));
         cpuBarBg.setFillColor(sf::Color(0, 100, 0));
         texture.draw(cpuBarBg);
         
         // CPU bar fill
-        float cpuBarWidth = (DISPLAY_WIDTH - 40) * stats.cpuPercent / 100.0f;
+        float cpuBarWidth = (400 - 40) * stats.cpuPercent / 100.0f;
         sf::RectangleShape cpuBarFill(sf::Vector2f(cpuBarWidth, 25));
         cpuBarFill.setPosition(sf::Vector2f(20, (float)y));
         cpuBarFill.setFillColor(sf::Color::Green);
@@ -40,7 +40,7 @@ public:
         char cpuText[32];
         snprintf(cpuText, sizeof(cpuText), "%.1f%%", stats.cpuPercent);
         sf::Text cpuPct(font, cpuText, 18);
-        cpuPct.setPosition(sf::Vector2f((float)(DISPLAY_WIDTH - 70), (float)(y + 2)));
+        cpuPct.setPosition(sf::Vector2f((float)(400 - 70), (float)(y + 2)));
         cpuPct.setFillColor(sf::Color::White);
         texture.draw(cpuPct);
 
@@ -61,13 +61,13 @@ public:
         y += 30;
         
         // Memory bar background
-        sf::RectangleShape memBarBg(sf::Vector2f((float)(DISPLAY_WIDTH - 40), 25));
+        sf::RectangleShape memBarBg(sf::Vector2f((float)(400 - 40), 25));
         memBarBg.setPosition(sf::Vector2f(20, (float)y));
         memBarBg.setFillColor(sf::Color(0, 0, 100));
         texture.draw(memBarBg);
         
         // Memory bar fill
-        float memBarWidth = (DISPLAY_WIDTH - 40) * stats.memPercent / 100.0f;
+        float memBarWidth = (400 - 40) * stats.memPercent / 100.0f;
         sf::RectangleShape memBarFill(sf::Vector2f(memBarWidth, 25));
         memBarFill.setPosition(sf::Vector2f(20, (float)y));
         memBarFill.setFillColor(sf::Color::Blue);
@@ -77,7 +77,7 @@ public:
         char memText[32];
         snprintf(memText, sizeof(memText), "%.1f%%", stats.memPercent);
         sf::Text memPct(font, memText, 18);
-        memPct.setPosition(sf::Vector2f((float)(DISPLAY_WIDTH - 70), (float)(y + 2)));
+        memPct.setPosition(sf::Vector2f((float)(400 - 70), (float)(y + 2)));
         memPct.setFillColor(sf::Color::White);
         texture.draw(memPct);
         y += 35;

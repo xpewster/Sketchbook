@@ -92,9 +92,9 @@ tft_io_expander = dict(board.TFT_IO_EXPANDER)
 dotclockframebuffer.ioexpander_send_init_sequence(i2c, init_sequence_hd371, **tft_io_expander)
 i2c.deinit()
 
-print("TFT pins:", tft_pins)
-
+# ==============================
 # Display dimensions
+# ==============================
 FRAME_WIDTH = 240
 FRAME_HEIGHT = 960
 FRAME_BYTES = FRAME_WIDTH * FRAME_HEIGHT * 2  # RGB565 = 2 bytes per pixel
@@ -110,21 +110,42 @@ display.root_group = group
 print(f"Display: {FRAME_WIDTH}x{FRAME_HEIGHT}")
 print(f"Frame size: {FRAME_BYTES} bytes")
 
-# Streaming buffers (double buffered)
-stream_bitmaps = [
-    displayio.Bitmap(FRAME_WIDTH, FRAME_HEIGHT, 65535),
-    displayio.Bitmap(FRAME_WIDTH, FRAME_HEIGHT, 65535)
-]
-stream_buffers = [memoryview(bmp).cast('B') for bmp in stream_bitmaps]
-print(f"Bitmap buffers allocated: {stream_bitmaps[0].bits_per_value // 8} bytes per pixel, {FRAME_WIDTH}x{FRAME_HEIGHT} total {len(stream_buffers[0])} bytes each")
-stream_tilegrids = [
-    displayio.TileGrid(
-        bmp,
-        pixel_shader=displayio.ColorConverter(input_colorspace=displayio.Colorspace.RGB565)
-    )
-    for bmp in stream_bitmaps
-]
-back_buffer_idx = 0
+# # Streaming buffers (double buffered)
+# stream_bitmaps = [
+#     displayio.Bitmap(FRAME_WIDTH, FRAME_HEIGHT, 65535),
+#     displayio.Bitmap(FRAME_WIDTH, FRAME_HEIGHT, 65535)
+# ]
+# stream_buffers = [memoryview(bmp).cast('B') for bmp in stream_bitmaps]
+# print(f"Bitmap buffers allocated: {stream_bitmaps[0].bits_per_value // 8} bytes per pixel, {FRAME_WIDTH}x{FRAME_HEIGHT} total {len(stream_buffers[0])} bytes each")
+# stream_tilegrids = [
+#     displayio.TileGrid(
+#         bmp,
+#         pixel_shader=displayio.ColorConverter(input_colorspace=displayio.Colorspace.RGB565)
+#     )
+#     for bmp in stream_bitmaps
+# ]
+# back_buffer_idx = 0
+
+# ==============================
+# Streaming buffer (single buffer for dirty rects)
+# ==============================
+# Using single buffer since we update in-place with dirty rects
+stream_bitmap = displayio.Bitmap(FRAME_WIDTH, FRAME_HEIGHT, 65535)
+stream_buffer = memoryview(stream_bitmap).cast('H')  # Cast to 16-bit for easier pixel access
+stream_buffer_bytes = memoryview(stream_bitmap).cast('B')  # Byte view for recv_into
+
+stream_tilegrid = displayio.TileGrid(
+    stream_bitmap,
+    pixel_shader=displayio.ColorConverter(input_colorspace=displayio.Colorspace.RGB565)
+)
+
+print(f"Single bitmap buffer allocated")
+
+# Small buffer for receiving header data
+header_buffer = bytearray(256)  # Enough for 32 rects * 8 bytes + 2 byte header
+
+# Flags for direct buffer modification
+last_dirty_dims = (0, 0, 0, 0)
 
 # TCP server settings
 TCP_PORT = 8765
@@ -258,38 +279,125 @@ if wifi_connected:
     
     print(f"TCP server listening on port {TCP_PORT}")
 
+# ==============================
+# Protocol Constants (must match PC side)
+# ==============================
+MSG_FULL_FRAME = 0x00
+MSG_DIRTY_RECTS = 0x01
+MSG_NO_CHANGE = 0x02
+
 # ------------------------------
 # Frame Receive  
 # ------------------------------
 
-def receive_frame(client, bitmap_mv):
-    """Receive exactly FRAME_BYTES into bitmap. Returns True on success."""
+def recv_exact(client, buffer, count):
+    """Receive exactly count bytes into buffer. Returns True on success."""
+    mv = memoryview(buffer)[:count]
     total = 0
-    bitmap_len = len(bitmap_mv)
-
-    while total < FRAME_BYTES:
-        if total >= bitmap_len:
-            print(f"Buffer overflow: total={total}, bitmap_len={bitmap_len}")
-            return False
-            
+    while total < count:
         try:
-            # Try to receive directly into bitmap buffer
-            n = client.recv_into(bitmap_mv[total:])
-            
+            n = client.recv_into(mv[total:])
             if n == 0:
-                print("Connection closed by peer")
                 return False
-            
             total += n
-            
+        except OSError as e:
+            print(f"Recv error: {e}")
+            return False
+    return True
+
+def receive_full_frame(client):
+    """Receive a full frame directly into bitmap buffer."""
+    global last_dirty_dims
+    total = 0
+    while total < FRAME_BYTES:
+        try:
+            n = client.recv_into(stream_buffer_bytes[total:])
+            if n == 0:
+                print("Connection closed")
+                return False
+            total += n
         except OSError as e:
             print(f"Receive error: {e}")
             return False
-        except Exception as e:
-            print(f"Error at offset {total}: {e}")
-            return False
+    last_dirty_dims = (0, 0, FRAME_WIDTH, FRAME_HEIGHT)
+    return True
+
+
+def receive_dirty_rects(client, rect_count):
+    """Receive dirty rectangles and update bitmap."""
+    global last_dirty_dims
+    # Read all rect headers first
+    header_size = rect_count * 8
+    if not recv_exact(client, header_buffer, header_size):
+        return False
+
+    min_x = FRAME_WIDTH
+    min_y = FRAME_HEIGHT
+    max_x = 0
+    max_y = 0
+    
+    # Parse rectangles and receive pixel data for each
+    for i in range(rect_count):
+        offset = i * 8
+        x = header_buffer[offset] | (header_buffer[offset + 1] << 8)
+        y = header_buffer[offset + 2] | (header_buffer[offset + 3] << 8)
+        w = header_buffer[offset + 4] | (header_buffer[offset + 5] << 8)
+        h = header_buffer[offset + 6] | (header_buffer[offset + 7] << 8)
+
+        # Update dirty bounds
+        min_x = min(min_x, x)
+        min_y = min(min_y, y)
+        max_x = max(max_x, x + w)
+        max_y = max(max_y, y + h)
+
+        # Receive pixels for this rect row by row into bitmap
+        for row in range(h):
+            row_start = (y + row) * FRAME_WIDTH + x
+            row_bytes = w * 2
+            
+            # Create view into bitmap for this row segment
+            # We need to receive into the byte buffer at the right position
+            byte_offset = row_start * 2
+
+            if not recv_exact(client, stream_buffer_bytes[byte_offset:byte_offset + row_bytes], row_bytes):
+                print("Failed to receive pixels for rect")
+                return False
+            
+    last_dirty_dims = (min_x, min_y, max_x, max_y)
     
     return True
+
+
+def handle_frame(client):
+    """Handle receiving a frame (full or dirty rects). Returns True on success."""
+    # Read message type
+    if not recv_exact(client, header_buffer, 1):
+        return False
+    
+    msg_type = header_buffer[0]
+    
+    if msg_type == MSG_FULL_FRAME:
+        print("Receiving full frame...")
+        return receive_full_frame(client)
+    
+    elif msg_type == MSG_DIRTY_RECTS:
+        # Read rect count
+        if not recv_exact(client, header_buffer, 1):
+            return False
+        rect_count = header_buffer[0]
+        
+        if rect_count == 0:
+            return True  # No rects to update
+        
+        return receive_dirty_rects(client, rect_count)
+    
+    elif msg_type == MSG_NO_CHANGE:
+        return True  # Nothing to do
+    
+    else:
+        print(f"Unknown message type: {msg_type}")
+        return False
+
 
 # ------------------------------
 # Main Loop
@@ -297,7 +405,7 @@ def receive_frame(client, bitmap_mv):
 
 print("Starting main loop...")
 
-frame_index = 0
+# frame_index = 0
 last_frame_time = time.monotonic()
 FRAME_DELAY = 0.10
 connected = False
@@ -305,6 +413,7 @@ client_socket = None
 
 frame_count = 0
 fps_start = time.monotonic()
+printed_fps = False
 
 while True:
     # Try to accept new connection
@@ -321,6 +430,12 @@ while True:
             # if animation_tilegrids and group[0] in animation_tilegrids:
             #     group[0] = stream_tilegrids[back_buffer_idx]
             # display.auto_refresh = True
+            display.auto_refresh = False
+            if gif_tilegrid and len(group) > 0 and group[0] is gif_tilegrid:
+                group[0] = stream_tilegrid
+            elif len(group) == 0:
+                group.append(stream_tilegrid)
+            display.auto_refresh = False
             
             frame_count = 0
             fps_start = time.monotonic()
@@ -330,32 +445,36 @@ while True:
     # Handle connected client
     if connected:
         try:
-            back_buffer = stream_buffers[back_buffer_idx]
-            
-            if receive_frame(client_socket, back_buffer):
-                # Swap buffers and display
-                display.auto_refresh = False
-                group[0] = stream_tilegrids[back_buffer_idx]
-                display.auto_refresh = True
+            if handle_frame(client_socket):
+                # Refresh display
+
+                # Mark buffer as dirty
+                min_x, min_y, max_x, max_y = last_dirty_dims
+                stream_bitmap.dirty(min_x, min_y, max_x, max_y)
+                # print(f"Refreshed dirty area: ({min_x}, {min_y}) - ({max_x}, {max_y})")
+                display.refresh()
                 
-                back_buffer_idx = 1 - back_buffer_idx
+                frame_count += 1
                 
-                # frame_count += 1
-                
-                # Report FPS every 2 seconds
-                # now = time.monotonic()
-                # if now - fps_start >= 2.0:
-                #     fps = frame_count / (now - fps_start)
-                #     kbps = (frame_count * FRAME_BYTES / 1024) / (now - fps_start)
-                #     print(f"FPS: {fps:.1f}, {kbps:.0f} KB/s")
-                #     frame_count = 0
-                #     fps_start = now
+                # Report FPS every 5 seconds
+                now = time.monotonic()
+                if now - fps_start >= 5.0:
+                    fps = frame_count / (now - fps_start)
+                    print(f"FPS: {fps:.1f}")
+                    frame_count = 0
+                    fps_start = now
             else:
                 # Connection lost or error
                 print("Client disconnected")
                 client_socket.close()
                 client_socket = None
                 connected = False
+                
+                # Switch back to GIF
+                if gif_tilegrid:
+                    display.auto_refresh = False
+                    group[0] = gif_tilegrid
+                    display.auto_refresh = True
 
         except Exception as e:
             print(f"Error handling client: {e}")
@@ -365,6 +484,8 @@ while True:
                 pass
             client_socket = None
             connected = False
+
+            raise e  # Re-raise to see in console
     
     # Play animation when not connected
     
@@ -391,19 +512,16 @@ while True:
         if now - last_frame_time >= FRAME_DELAY:
             last_frame_time = now
 
-            if group[0] is not gif_tilegrid:
-                display.auto_refresh = False
-                group[0] = gif_tilegrid
-                display.auto_refresh = True
-            else:
-                frame_count += 1
-                display.auto_refresh = False
-                gif.next_frame()
-                display.auto_refresh = True
+            frame_count += 1
+            # display.auto_refresh = False
+            gif.next_frame()
+            # display.auto_refresh = True
+            display.refresh()
 
-            if (frame_count % 10) == 0:
+            if ((not printed_fps) and ((frame_count % 10) == 0)):
                 print(f"FPS: {frame_count / (now - fps_start):.1f}")
                 frame_count = 0
                 fps_start = now
+                printed_fps = True
     
     time.sleep(0.001)

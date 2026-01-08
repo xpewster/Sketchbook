@@ -4,6 +4,7 @@
 
 #include "system_stats.h"
 #include "image.hpp"
+#include "dirty_rects.hpp"
 
 #include <SFML/Graphics.hpp>
 #include <Shlobj.h>
@@ -82,11 +83,12 @@ public:
     
     bool isConnected() const { return sock_ != INVALID_SOCKET; }
     
-    bool sendFrame(const uint16_t* data, size_t pixelCount) {
+    // Send arbitrary byte buffer
+    bool sendPacket(const uint8_t* data, size_t size) {
         if (!isConnected()) return false;
         
         const char* ptr = reinterpret_cast<const char*>(data);
-        int remaining = static_cast<int>(pixelCount * 2);
+        int remaining = static_cast<int>(size);
         
         while (remaining > 0) {
             int sent = send(sock_, ptr, remaining, 0);
@@ -98,6 +100,10 @@ public:
             remaining -= sent;
         }
         return true;
+    }
+    
+    bool sendFrame(const uint16_t* data, size_t pixelCount) {
+        return sendPacket(reinterpret_cast<const uint8_t*>(data), pixelCount * 2);
     }
     
 private:
@@ -118,6 +124,7 @@ public:
         connection_ = conn;
         running_ = true;
         sendError_ = false;
+        dirtyTracker_.invalidate();  // Reset tracker on new connection
         sendThread_ = std::thread(&FrameSender::sendLoop, this);
     }
     
@@ -137,17 +144,16 @@ public:
         {
             std::lock_guard<std::mutex> lock(mutex_);
             // Copy frame data to send buffer
-            sendBuffer_ = frame.pixels;
+            pendingFrame_ = frame;
             frameReady_ = true;
         }
         cv_.notify_one();
     }
     
-    // Get current FPS (thread-safe, callable from any thread)
+    // Get current FPS (thread-safe)
     double getFPS() const {
         std::lock_guard<std::mutex> lock(fpsMutex_);
         
-        // Remove timestamps older than the window
         while (!frameTimestamps_.empty()) {
             if (frameTimestamps_.size() > fpsWindow_) {
                 frameTimestamps_.pop_front();
@@ -161,9 +167,30 @@ public:
         }
 
         auto latest = frameTimestamps_.back();
-        
         double timeSpan = std::chrono::duration<double>(latest - frameTimestamps_.front()).count();
         return timeSpan > 0.0 ? frameTimestamps_.size() / timeSpan : 0.0;
+    }
+    
+    // Get compression stats
+    float getCompressionRatio() const {
+        std::lock_guard<std::mutex> lock(statsMutex_);
+        return lastCompressionRatio_;
+    }
+    
+    int getLastRectCount() const {
+        std::lock_guard<std::mutex> lock(statsMutex_);
+        return lastRectCount_;
+    }
+    
+    size_t getLastPacketSize() const {
+        std::lock_guard<std::mutex> lock(statsMutex_);
+        return lastPacketSize_;
+    }
+
+    // For debugging: get dirty rectangles from last frame
+    std::vector<qualia::DirtyRect> getLastDirtyRects() const {
+        std::lock_guard<std::mutex> lock(statsMutex_);
+        return lastDirtyRects_;
     }
     
     bool hadError() const { return sendError_; }
@@ -178,14 +205,29 @@ private:
             if (!running_) break;
             
             if (frameReady_) {
-                // Copy buffer while holding lock
-                std::vector<uint16_t> toSend = std::move(sendBuffer_);
+                // Copy frame while holding lock
+                qualia::Image frameToSend = std::move(pendingFrame_);
                 frameReady_ = false;
                 lock.unlock();
                 
-                // Send without holding lock
-                if (connection_->sendFrame(toSend.data(), toSend.size())) {
-                    // Record successful frame send
+                // Find dirty rectangles
+                auto rects = dirtyTracker_.findDirtyRects(frameToSend);
+                
+                // Build packet with dirty rect protocol
+                std::vector<uint8_t> packet = dirtyTracker_.buildPacket(frameToSend, rects);
+                
+                // Update stats
+                {
+                    std::lock_guard<std::mutex> slock(statsMutex_);
+                    auto stats = dirtyTracker_.getLastStats(rects);
+                    lastCompressionRatio_ = stats.compressionRatio;
+                    lastRectCount_ = stats.rectCount;
+                    lastPacketSize_ = packet.size();
+                    lastDirtyRects_ = rects; // Store for debugging
+                }
+                
+                // Send packet
+                if (connection_->sendPacket(packet.data(), packet.size())) {
                     recordFrameSent();
                 } else {
                     sendError_ = true;
@@ -203,14 +245,25 @@ private:
     std::thread sendThread_;
     std::mutex mutex_;
     std::condition_variable cv_;
-    std::vector<uint16_t> sendBuffer_;
+    qualia::Image pendingFrame_;
     std::atomic<bool> running_;
     std::atomic<bool> frameReady_;
     std::atomic<bool> sendError_;
+    
+    // Dirty rect tracker
+    qualia::DirtyRectTracker dirtyTracker_;
+    std::vector<qualia::DirtyRect> lastDirtyRects_;
 
-    const int fpsWindow_;  // Number of timestamps to keep for FPS calculation
+    // FPS tracking
+    const int fpsWindow_;
     mutable std::mutex fpsMutex_;
     mutable std::deque<std::chrono::steady_clock::time_point> frameTimestamps_;
+    
+    // Stats
+    mutable std::mutex statsMutex_;
+    float lastCompressionRatio_ = 1.0f;
+    int lastRectCount_ = 0;
+    size_t lastPacketSize_ = 0;
 };
 
 // Convert RenderTexture to RGB565 for Qualia
@@ -225,26 +278,27 @@ void textureToRGB565(sf::RenderTexture& texture, qualia::Image& image) {
     }
 }
 
-// Convert RenderTexture to RGB565 for Qualia with 90 degree rotation
+// Rotate 90 degrees clockwise during conversion
 void textureToRGB565Rot90(sf::RenderTexture& texture, qualia::Image& image) {
     sf::Image sfImg = texture.getTexture().copyToImage();
     
+    // texture is (height, width), output is (width, height)
+    // Output pixel (x, y) comes from input pixel (y, width-1-x)
     for (int y = 0; y < image.height; y++) {
         for (int x = 0; x < image.width; x++) {
-            // Rotate 90 degrees clockwise
             sf::Color c = sfImg.getPixel(sf::Vector2u(y, image.width - 1 - x));
             image.at(x, y) = qualia::rgb565(c.r, c.g, c.b);
         }
     }
 }
 
-// Convert RenderTexture to RGB565 for Qualia with -90 degree rotation
+// Rotate 90 degrees counter-clockwise during conversion  
 void textureToRGB565RotNeg90(sf::RenderTexture& texture, qualia::Image& image) {
     sf::Image sfImg = texture.getTexture().copyToImage();
     
+    // Output pixel (x, y) comes from input pixel (height-1-y, x)
     for (int y = 0; y < image.height; y++) {
         for (int x = 0; x < image.width; x++) {
-            // Rotate 90 degrees counterclockwise
             sf::Color c = sfImg.getPixel(sf::Vector2u(image.height - 1 - y, x));
             image.at(x, y) = qualia::rgb565(c.r, c.g, c.b);
         }
@@ -261,11 +315,10 @@ int main() {
 
     Settings settings;
     if (!settings.load()) {
-        std::cerr << "Failed to load settings\n";
+        std::cerr << "Failed to load settings.toml\n";
         return 1;
     }
-    
-    // Validate API key
+
     if (settings.weather.apiKey == "YOUR_API_KEY_HERE" || settings.weather.apiKey.empty()) {
         std::cerr << "Please set your OpenWeatherMap API key in settings.toml\n";
         return 1;
@@ -363,7 +416,7 @@ int main() {
     
     // Timing
     sf::Clock sendClock;
-    const float sendInterval = 0.1f;
+    const float sendInterval = 0.05f;  // ~20 FPS target
     
     while (window.isOpen()) {
         // Handle events
@@ -438,7 +491,13 @@ int main() {
                 textureToRGB565Rot90(qualiaTexture, frameBuffer);
             }
             sender.queueFrame(frameBuffer);
-            statusMsg = "Connected to " + ipInput.value + " | FPS: " + std::format("{:.2f}", sender.getFPS());
+            
+            // Show compression stats
+            float ratio = sender.getCompressionRatio();
+            int rects = sender.getLastRectCount();
+            size_t packetKB = sender.getLastPacketSize() / 1024;
+            statusMsg = std::format("Connected | FPS: {:.1f} | {:.0f}% dirty ({} rects, {}KB)", 
+                                   sender.getFPS(), ratio * 100.0f, rects, packetKB);
         }
         
         // Update status text
@@ -470,6 +529,35 @@ int main() {
         skinDropdown.draw(window);
         window.draw(statusIndicator);
         window.draw(statusIndicatorBorder);
+
+        // Debugging: show dirty rectangles on preview
+        if (connected) {
+            std::vector<qualia::DirtyRect> dirtyRects = sender.getLastDirtyRects();
+            for (const auto& rect : dirtyRects) {
+                // Need to unrotate
+                int x = rect.x;
+                int y = rect.y;
+                int w = rect.w;
+                int h = rect.h;
+                if (settings.preferences.rotate180) {
+                    // -90 rotation: (x, y) -> (height-1-y, x)
+                    x = qualia::DISPLAY_HEIGHT - rect.y + 1 - rect.h;
+                    y = rect.x;
+                    w = rect.h;
+                    h = rect.w;
+                } else {
+                    // 90 rotation: (x, y) -> (y, width-1-x)
+                    x = rect.y;
+                    y = qualia::DISPLAY_WIDTH - rect.x + 1 - rect.w;
+                    w = rect.h;
+                    h = rect.w;
+                }
+                sf::RectangleShape r(sf::Vector2f((float)w, (float)h));
+                r.setPosition(sf::Vector2f((float)(previewX + x), (float)(previewY + y + menuHeight)));
+                r.setFillColor(sf::Color(255, 0, 0, 100));
+                window.draw(r);
+            }
+        }
         
         // Status bar
         window.draw(statusText);
