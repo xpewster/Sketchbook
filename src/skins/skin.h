@@ -3,24 +3,171 @@
 #include <SFML/Graphics.hpp>
 #include <string>
 #include <unordered_map>
+#include <filesystem>
 
 #include "../system_stats.h"
 #include "../utils/xml.h"
 #include "../weather.hpp"
 #include "../train.hpp"
 
+// Flash mode layer flags
+enum class FlashLayer : uint8_t {
+    None        = 0,
+    Background  = 1 << 0,
+    Character   = 1 << 1,
+    WeatherIcon = 1 << 2,
+    Text        = 1 << 3,
+    All         = 0xFF
+};
+
+inline FlashLayer operator|(FlashLayer a, FlashLayer b) {
+    return static_cast<FlashLayer>(static_cast<uint8_t>(a) | static_cast<uint8_t>(b));
+}
+
+inline FlashLayer operator&(FlashLayer a, FlashLayer b) {
+    return static_cast<FlashLayer>(static_cast<uint8_t>(a) & static_cast<uint8_t>(b));
+}
+
+inline bool hasLayer(FlashLayer flags, FlashLayer layer) {
+    return (static_cast<uint8_t>(flags) & static_cast<uint8_t>(layer)) != 0;
+}
+
+// Flash mode configuration
+struct FlashConfig {
+    FlashLayer enabledLayers = FlashLayer::None;
+    bool previewComposite = true;  // true: show full skin in preview, false: show magenta where flashed
+    
+    bool isLayerFlashed(FlashLayer layer) const {
+        return hasLayer(enabledLayers, layer);
+    }
+};
+
+// Font configuration entry
+struct FontConfig {
+    int index = 0;
+    std::string ttfFile;   // TTF filename
+    std::string pcfFile;   // PCF filename (same name, different extension)
+    sf::Font font;
+    bool loaded = false;
+};
+
+// Character temperature state
+enum class CharacterTempState {
+    Normal,
+    Warm,
+    Hot
+};
+
 class Skin {
 private:
     
 protected:
-    sf::Font font;
+    sf::Font defaultFont;
     const int DISPLAY_WIDTH;
     const int DISPLAY_HEIGHT;
     std::unordered_map<std::string, std::string> parameters;
-    std::vector<sf::Font*> fonts;
+    std::vector<FontConfig> fontConfigs;
     unsigned long frameCount = 0;
     std::string baseSkinDir;
     bool parametersRefreshed = false;
+    
+    // Flash mode
+    FlashConfig flashConfig;
+    
+    // Temperature thresholds
+    float warmTempThreshold = 60.0f;  // Celsius
+    float hotTempThreshold = 80.0f;   // Celsius
+
+    // Helper to determine character temperature state
+    CharacterTempState getCharacterTempState(float tempC) const {
+        if (tempC >= hotTempThreshold) return CharacterTempState::Hot;
+        if (tempC >= warmTempThreshold) return CharacterTempState::Warm;
+        return CharacterTempState::Normal;
+    }
+    
+    // Load fonts from configuration
+    void loadFonts() {
+        fontConfigs.clear();
+        
+        for (int i = 0; i < 16; i++) {  // Support up to 16 fonts
+            std::string ttfKey = "skin.fonts.font[id=" + std::to_string(i) + "].ttf";
+            
+            auto it = parameters.find(ttfKey);
+            if (it != parameters.end() && !it->second.empty()) {
+                FontConfig fc;
+                fc.index = i;
+                fc.ttfFile = it->second;
+                
+                // PCF file has same name but .pcf extension
+                std::string baseName = fc.ttfFile;
+                size_t dotPos = baseName.rfind('.');
+                if (dotPos != std::string::npos) {
+                    fc.pcfFile = baseName.substr(0, dotPos) + ".pcf";
+                } else {
+                    fc.pcfFile = baseName + ".pcf";
+                }
+                
+                // Load the TTF font
+                std::string fullPath = baseSkinDir + "/" + fc.ttfFile;
+                if (fc.font.openFromFile(fullPath)) {
+                    fc.loaded = true;
+                    // Disable anti-aliasing to prevent magenta glow in flash mode
+                    fc.font.setSmooth(false);
+                    std::cout << "Loaded font " << i << ": " << fc.ttfFile << "\n";
+                } else {
+                    std::cerr << "Failed to load font: " << fullPath << "\n";
+                }
+                
+                fontConfigs.push_back(std::move(fc));
+            }
+        }
+        
+        // If no fonts specified, use default
+        if (fontConfigs.empty()) {
+            FontConfig fc;
+            fc.index = 0;
+            fc.ttfFile = "times.ttf";
+            fc.pcfFile = "times.pcf";
+            if (defaultFont.openFromFile("C:/Windows/Fonts/times.ttf")) {
+                defaultFont.setSmooth(false);
+                fc.font = defaultFont;
+                fc.loaded = true;
+            }
+            fontConfigs.push_back(std::move(fc));
+        }
+    }
+    
+    // Load flash configuration
+    void loadFlashConfig() {
+        flashConfig.enabledLayers = FlashLayer::None;
+        
+        if (parameters.find("skin.flash.background") != parameters.end() &&
+            (parameters["skin.flash.background"] == "true" || parameters["skin.flash.background"] == "1")) {
+            flashConfig.enabledLayers = flashConfig.enabledLayers | FlashLayer::Background;
+        }
+        if (parameters.find("skin.flash.character") != parameters.end() &&
+            (parameters["skin.flash.character"] == "true" || parameters["skin.flash.character"] == "1")) {
+            flashConfig.enabledLayers = flashConfig.enabledLayers | FlashLayer::Character;
+        }
+        if (parameters.find("skin.flash.weather_icon") != parameters.end() &&
+            (parameters["skin.flash.weather_icon"] == "true" || parameters["skin.flash.weather_icon"] == "1")) {
+            flashConfig.enabledLayers = flashConfig.enabledLayers | FlashLayer::WeatherIcon;
+        }
+        if (parameters.find("skin.flash.text") != parameters.end() &&
+            (parameters["skin.flash.text"] == "true" || parameters["skin.flash.text"] == "1")) {
+            flashConfig.enabledLayers = flashConfig.enabledLayers | FlashLayer::Text;
+        }
+        
+        // Temperature thresholds
+        auto warmIt = parameters.find("skin.character.temp.warm");
+        if (warmIt != parameters.end()) {
+            try { warmTempThreshold = std::stof(warmIt->second); } catch (...) {}
+        }
+        auto hotIt = parameters.find("skin.character.temp.hot");
+        if (hotIt != parameters.end()) {
+            try { hotTempThreshold = std::stof(hotIt->second); } catch (...) {}
+        }
+    }
 
 public:
     std::string name;
@@ -31,12 +178,8 @@ public:
     int initialize(const std::string& xmlFilePath) {
         this->xmlFilePath = xmlFilePath;
         parameters.clear();
-        fonts.clear();
-        if (!font.openFromFile("C:/Windows/Fonts/times.ttf")) {
-            std::cerr << "Failed to load font\n";
-            return 1;
-        }
-        fonts.push_back(&font);
+        fontConfigs.clear();
+        
         if (!xmlFilePath.empty()) {
             baseSkinDir = std::filesystem::path(xmlFilePath).parent_path().string();
             std::cout << "Loading skin from: " << baseSkinDir << "\n";
@@ -45,9 +188,57 @@ public:
                 return 1;
             }
         }
+
+        // Debug: print loaded parameters
+        std::cout << "Loaded skin parameters:\n";
+        for (const auto& kv : parameters) {
+            std::cout << "  " << kv.first << " = " << kv.second << "\n";
+        }
+        
+        loadFonts();
+        loadFlashConfig();
         parametersRefreshed = true;
         return 0;
     }
+    
+    // Get font by index
+    sf::Font* getFont(int index) {
+        for (auto& fc : fontConfigs) {
+            if (fc.index == index && fc.loaded) {
+                return &fc.font;
+            }
+        }
+        // Return first loaded font as fallback
+        for (auto& fc : fontConfigs) {
+            if (fc.loaded) return &fc.font;
+        }
+        return nullptr;
+    }
+    
+    // Get font config by index (for flash export)
+    const FontConfig* getFontConfig(int index) const {
+        for (const auto& fc : fontConfigs) {
+            if (fc.index == index) return &fc;
+        }
+        return fontConfigs.empty() ? nullptr : &fontConfigs[0];
+    }
+    
+    // Get all font configs (for flash export)
+    const std::vector<FontConfig>& getFontConfigs() const { return fontConfigs; }
+    
+    // Get flash configuration
+    const FlashConfig& getFlashConfig() const { return flashConfig; }
+    FlashConfig& getFlashConfig() { return flashConfig; }
+    
+    // Get base skin directory (for flash export)
+    const std::string& getBaseSkinDir() const { return baseSkinDir; }
+    
+    // Get all parameters (for flash export)
+    const std::unordered_map<std::string, std::string>& getParameters() const { return parameters; }
+    
+    // Get temperature thresholds
+    float getWarmTempThreshold() const { return warmTempThreshold; }
+    float getHotTempThreshold() const { return hotTempThreshold; }
 
     // Original draw method - uses internal frame counter
     virtual void draw(sf::RenderTexture& texture, SystemStats& stats, WeatherData& weather, TrainData& train) = 0;
@@ -56,6 +247,15 @@ public:
     // Default implementation calls the original draw method for backward compatibility
     virtual void draw(sf::RenderTexture& texture, SystemStats& stats, WeatherData& weather, TrainData& train, double animationTime) {
         draw(texture, stats, weather, train);
+    }
+    
+    // Draw with flash mode support - renders only non-flashed layers
+    // flashedLayers: which layers are handled by remote (skip rendering these)
+    // transparentColor: color to use for areas that remote will fill
+    virtual void drawForFlash(sf::RenderTexture& texture, SystemStats& stats, WeatherData& weather, TrainData& train, 
+                              double animationTime, FlashLayer flashedLayers, sf::Color transparentColor) {
+        // Default: just call normal draw (override in derived classes)
+        draw(texture, stats, weather, train, animationTime);
     }
 
     virtual ~Skin() = default;

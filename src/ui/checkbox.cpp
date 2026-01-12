@@ -112,4 +112,18 @@ public:
     void setLabel(const std::string& label) {
         labelText.setString(label);
     }
+
+    void setPosition(float x, float y) {
+        position = sf::Vector2f(x, y);
+        sf::Vector2 posChange = position - box.getPosition();
+        box.setPosition(position);
+        labelText.setPosition(labelText.getPosition() + posChange);
+        if (checkmarkSprite.has_value()) {
+            sf::Vector2f oldPos = checkmarkSprite->getPosition();
+            checkmarkSprite->setPosition(sf::Vector2f(
+                oldPos.x + posChange.x,
+                oldPos.y + posChange.y
+            ));
+        }
+    }
 };

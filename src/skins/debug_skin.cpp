@@ -10,14 +10,14 @@ public:
         int y = 20;
         
         // Title
-        sf::Text title(font, "SYSTEM MONITOR", 28);
+        sf::Text title(defaultFont, "SYSTEM MONITOR", 28);
         title.setPosition(sf::Vector2f(20, (float)y));
         title.setFillColor(sf::Color(100, 200, 255));
         texture.draw(title);
         y += 50;
         
         // CPU section
-        sf::Text cpuLabel(font, "CPU", 18);
+        sf::Text cpuLabel(defaultFont, "CPU", 18);
         cpuLabel.setPosition(sf::Vector2f(20, (float)y));
         cpuLabel.setFillColor(sf::Color::White);
         texture.draw(cpuLabel);
@@ -39,7 +39,7 @@ public:
         // CPU percentage text
         char cpuText[32];
         snprintf(cpuText, sizeof(cpuText), "%.1f%%", stats.cpuPercent);
-        sf::Text cpuPct(font, cpuText, 18);
+        sf::Text cpuPct(defaultFont, cpuText, 18);
         cpuPct.setPosition(sf::Vector2f((float)(400 - 70), (float)(y + 2)));
         cpuPct.setFillColor(sf::Color::White);
         texture.draw(cpuPct);
@@ -47,14 +47,14 @@ public:
         // CPU temperature text
         char tempText[32];
         snprintf(tempText, sizeof(tempText), "Temp: %.1f C", stats.cpuTempC);
-        sf::Text tempLabel(font, tempText, 14);
+        sf::Text tempLabel(defaultFont, tempText, 14);
         tempLabel.setPosition(sf::Vector2f(20, (float)(y + 30)));
         tempLabel.setFillColor(sf::Color(150, 150, 150));
         texture.draw(tempLabel);
         y += 45;
         
         // Memory section
-        sf::Text memLabel(font, "MEMORY", 18);
+        sf::Text memLabel(defaultFont, "MEMORY", 18);
         memLabel.setPosition(sf::Vector2f(20, (float)y));
         memLabel.setFillColor(sf::Color::White);
         texture.draw(memLabel);
@@ -76,7 +76,7 @@ public:
         // Memory percentage text
         char memText[32];
         snprintf(memText, sizeof(memText), "%.1f%%", stats.memPercent);
-        sf::Text memPct(font, memText, 18);
+        sf::Text memPct(defaultFont, memText, 18);
         memPct.setPosition(sf::Vector2f((float)(400 - 70), (float)(y + 2)));
         memPct.setFillColor(sf::Color::White);
         texture.draw(memPct);
@@ -87,14 +87,14 @@ public:
         snprintf(memUsage, sizeof(memUsage), "%llu / %llu MB",
                 (unsigned long long)stats.memUsedMB,
                 (unsigned long long)stats.memTotalMB);
-        sf::Text memUsageText(font, memUsage, 14);
+        sf::Text memUsageText(defaultFont, memUsage, 14);
         memUsageText.setPosition(sf::Vector2f(20, (float)y));
         memUsageText.setFillColor(sf::Color(150, 150, 150));
         texture.draw(memUsageText);
 
         // Weather section
         y -= 140;
-        sf::Text weatherLabel(font, "WEATHER", 18);
+        sf::Text weatherLabel(defaultFont, "WEATHER", 18);
         weatherLabel.setPosition(sf::Vector2f(400, (float)y));
         weatherLabel.setFillColor(sf::Color::White);
         texture.draw(weatherLabel);
@@ -104,14 +104,14 @@ public:
         char weatherText[64];
         snprintf(weatherText, sizeof(weatherText), "Icon: %s, Temp: %.1f %s, Wind: %.1f mph",
                 weather.iconCode.c_str(), weather.currentTemp, "F", weather.windSpeed);
-        sf::Text weatherInfo(font, weatherText, 14);
+        sf::Text weatherInfo(defaultFont, weatherText, 14);
         weatherInfo.setPosition(sf::Vector2f(400, (float)y));
         weatherInfo.setFillColor(sf::Color(150, 150, 150));
         texture.draw(weatherInfo);
 
         // Train section
         y += 50;
-        sf::Text trainLabel(font, "TRAIN", 18);
+        sf::Text trainLabel(defaultFont, "TRAIN", 18);
         trainLabel.setPosition(sf::Vector2f(400, (float)y));
         trainLabel.setFillColor(sf::Color::White);
         texture.draw(trainLabel);
@@ -120,7 +120,7 @@ public:
         char trainText[128];
         snprintf(trainText, sizeof(trainText), "Next: %s in %d min, %s in %d min",
                 train.headsign0.c_str(), (int)train.minsToNextTrain0, train.headsign1.c_str(), (int)train.minsToNextTrain1);
-        sf::Text trainInfo(font, trainText, 14);
+        sf::Text trainInfo(defaultFont, trainText, 14);
         trainInfo.setPosition(sf::Vector2f(400, (float)y));
         trainInfo.setFillColor(sf::Color(150, 150, 150));
         texture.draw(trainInfo);
