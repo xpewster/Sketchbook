@@ -14,34 +14,53 @@
     <character>
         <png>char.png</png>
         <hot><png>char_hot.png</png></hot>
-        <x>400</x>
-        <y>50</y>
+        <x>234</x>
+        <y>10</y>
         <flip>false</flip>
+		<bobbing>
+			<enabled>true</enabled>
+            <amplitude>3</amplitude>
+            <speed>1</speed>
+		</bobbing>
     </character>
     <weather>
         <icon>
-            <sunny><png>weather/sunny.png</png></sunny>
+            <sunny>
+                <png>weather/sunny.png</png>
+                <animation>
+                    <enabled>true</enabled>
+                    <speed>5</speed>
+                    <framecount>6</framecount>
+                </animation>
+            </sunny>
             <cloudy><png>weather/cloudy.png</png></cloudy>
             <rainy><png>weather/rainy.png</png></rainy>
             <snowy><png>weather/snowy.png</png></snowy>
             <thunderstorm><png>weather/thunderstorm.png</png></thunderstorm>
-            <foggy><png>weather/foggy.png</png></foggy>
+            <foggy>
+                <png>weather/foggy.png</png>
+                <animation>
+                    <enabled>true</enabled>
+                    <speed>5</speed>
+                    <framecount>6</framecount>
+                </animation>
+            </foggy>
             <night><png>weather/night.png</png></night>
-            <width>50</width>
-            <height>50</height>
-            <x>10</x>
-            <y>10</y>
+            <width>120</width>
+            <height>120</height>
+            <x>500</x>
+            <y>110</y>
             <bobbing>
-                <enabled>true</enabled>
+                <enabled>false</enabled>
                 <speed>5</speed>
             </bobbing>
         </icon>
         <text>
             <fontindex>0</fontindex>
-            <x>70</x>
-            <y>10</y>
+            <x>628</x>
+            <y>131</y>
             <color>#000000</color>
-            <size>16</size>
+            <size>64</size>
         </text>
     </weather>
     <hwmon>
@@ -49,24 +68,32 @@
         <cpu>
             <usage>
                 <text>
-                    <x>600</x>
-                    <y>20</y>
+                    <x>630</x>
+                    <y>16</y>
                     <color>#000000</color>
-                    <size>14</size>
+                    <size>30</size>
                 </text>
                 <icon>
                     <path>icon/cpu.png</path>
+                    <x>584</x>
+                    <y>16</y>
+                    <width>36</width>
+                    <height>36</height>
                 </icon>
             </usage>
             <temp>
                 <text>
-                    <x>600</x>
+                    <x>630</x>
                     <y>40</y>
                     <color>#000000</color>
-                    <size>14</size>
+                    <size>30</size>
                 </text>
                 <icon>
-                    <path>icon/cpu.png</path>
+                    <path>icon/temp.png</path>
+                    <x>580</x>
+                    <y>45</y>
+                    <width>30</width>
+                    <height>24</height>
                 </icon>
             </temp>
             <combine>True</combine>
@@ -74,26 +101,45 @@
         <mem>
             <usage>
                 <text>
-                    <x>600</x>
-                    <y>60</y>
+                    <x>630</x>
+                    <y>50</y>
                     <color>#000000</color>
-                    <size>14</size>
+                    <size>30</size>
                 </text>
                 <icon>
                     <path>icon/mem.png</path>
+                    <x>575</x>
+                    <y>50</y>
+                    <width>44</width>
+                    <height>38</height>
                 </icon>
             </usage>
         </mem>
         <train>
             <next>
-                <x>600</x>
-                <y>80</y>
-                <color>#000000</color>
-                <size>14</size>
-            </next>
-            <icon>
-                <path>icon/train.png</path>
-            </icon>
+				<text>
+					<x>630</x>
+					<y>85</y>
+					<color>#000000</color>
+					<size>30</size>
+				</text>
+                <icon>
+                    <path>icon/train.png</path>
+                    <x>570</x>
+                    <y>72</y>
+                    <width>50</width>
+                    <height>50</height>
+                </icon>
+            </next> 
         </train>
     </hwmon>
+    <fonts>
+        <font id="0"><ttf>font/COMIC.ttf</ttf></font>
+    </fonts>
+    <flash>
+        <background>false</background>
+        <character>true</character>
+        <weather>false</weather>
+        <icons>false</icons>
+    </flash>
 </skin>
