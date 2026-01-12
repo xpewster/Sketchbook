@@ -914,17 +914,9 @@ private:
             sf::Font* hwmonFont = Skin::getFont(hwmonTextFontIndex);
             if (hwmonFont) {
                 char trainStr[128];
-                if (train.available0 && train.available1) {
-                    snprintf(trainStr, sizeof(trainStr), "Next train: %.0fm | %.0fm",
-                            train.minsToNextTrain0,
-                            train.minsToNextTrain1);
-                } else if (train.available0) {
-                    snprintf(trainStr, sizeof(trainStr), "Next train: %.0fm | --",
-                            train.minsToNextTrain0);
-                } else {
-                    snprintf(trainStr, sizeof(trainStr), "Next train: -- | %.0fm",
-                            train.minsToNextTrain1);
-                }
+                std::string train0Str = (train.available0 && train.minsToNextTrain0 != 999) ? std::to_string((int)train.minsToNextTrain0) + "m" : "--";
+                std::string train1Str = (train.available1 && train.minsToNextTrain1 != 999) ? std::to_string((int)train.minsToNextTrain1) + "m" : "--";
+                snprintf(trainStr, sizeof(trainStr), "Next Train: %s | %s", train0Str.c_str(), train1Str.c_str());
                 sf::Text trainText(*hwmonFont, trainStr, trainNextTextSize);
                 trainText.setPosition(sf::Vector2f(trainNextTextX, trainNextTextY));
                 trainText.setFillColor(trainNextTextColor);

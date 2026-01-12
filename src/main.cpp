@@ -38,6 +38,13 @@
 const sf::Color FLASH_TRANSPARENT_COLOR(248, 0, 248);
 constexpr uint16_t FLASH_TRANSPARENT_RGB565 = 0xF81F;
 
+// Connection state for async connection
+enum class ConnectionState {
+    Disconnected,
+    Connecting,
+    Connected
+};
+
 class TcpConnection {
 public:
     TcpConnection() : sock_(INVALID_SOCKET) {
@@ -738,6 +745,14 @@ int main() {
     // Flash export status
     std::string flashExportStatus;
     
+    // Async connection state
+    ConnectionState connectionState = ConnectionState::Disconnected;
+    std::thread connectThread;
+    std::atomic<bool> connectResult{false};
+    std::atomic<bool> connectFinished{false};
+    std::string connectingIP;
+    sf::Clock ellipsisClock;
+    
     while (window.isOpen()) {
         // Handle events
         bool mousePressed = false;
@@ -778,36 +793,52 @@ int main() {
                 skins[skinName]->getFlashConfig().previewComposite = previewCompositeCB.isChecked();
             }
         }
-        
-        // Handle flash mode checkbox - controls ENABLED file on device
+
+        ipInput.update(mousePos, window);
+        skinDropdown.update(mousePos, window);
+        flashDriveInput.update(mousePos, window);
+
         static bool lastFlashModeChecked = settings.preferences.flashMode;
-        if (flashModeCB.isChecked() != lastFlashModeChecked) {
-            lastFlashModeChecked = flashModeCB.isChecked();
-            flash::AnimeSkinFlashExporter exporter(settings.network.espDrive);
-            
-            if (flashModeCB.isChecked()) {
-                // Trying to enable - check if flashable and enable
-                if (exporter.isFlashable()) {
-                    if (exporter.enableFlashMode()) {
-                        settings.preferences.flashMode = true;
-                        flashExportStatus = "Flash mode enabled";
+        // Disable flash mode checkbox if skin doesn't support it
+        if (skins[skinName]->initialized && !skins[skinName]->hasFlashConfig()) {
+            flashModeCB.setChecked(false);
+            flashModeCB.setDisabled(true);
+            settings.preferences.flashMode = false;
+        } else {
+            flashModeCB.setDisabled(false);
+
+            // Handle flash mode checkbox - controls ENABLED file on device
+            if (flashModeCB.isChecked() != lastFlashModeChecked) {
+                flash::AnimeSkinFlashExporter exporter(settings.network.espDrive);
+                
+                if (flashModeCB.isChecked()) {
+                    // Trying to enable - check if flashable and enable
+                    if (exporter.isFlashable()) {
+                        if (exporter.enableFlashMode()) {
+                            settings.preferences.flashMode = true;
+                            flashExportStatus = "Flash mode enabled";
+                        } else {
+                            flashModeCB.setChecked(false);
+                            flashExportStatus = "Failed to enable flash mode";
+                        }
                     } else {
                         flashModeCB.setChecked(false);
-                        flashExportStatus = "Failed to enable flash mode";
+                        flashExportStatus = "Drive not flashable (no FLASHABLE marker)";
                     }
                 } else {
-                    flashModeCB.setChecked(false);
-                    flashExportStatus = "Drive not flashable (no FLASHABLE marker)";
+                    // Disabling flash mode
+                    if (exporter.isFlashable()) {
+                        exporter.disableFlashMode();
+                    }
+                    settings.preferences.flashMode = false;
+                    flashExportStatus = "Flash mode disabled";
                 }
-            } else {
-                // Disabling flash mode
-                if (exporter.isFlashable()) {
-                    exporter.disableFlashMode();
-                }
-                settings.preferences.flashMode = false;
-                flashExportStatus = "Flash mode disabled";
+
+                lastFlashModeChecked = flashModeCB.isChecked();
             }
         }
+        
+        
         
         // Handle flash export button
         if (flashBtn.update(mousePos, mousePressed, window)) {
@@ -842,6 +873,7 @@ int main() {
             sender.stop();
             connection.disconnect();
             connected = false;
+            connectionState = ConnectionState::Disconnected;
             statusMsg = "Connection lost";
             connectBtn.setLabel("Connect");
             connectBtn.setColor(sf::Color(100, 255, 100), sf::Color(150, 255, 150));
@@ -855,23 +887,72 @@ int main() {
                 sender.stop();
                 connection.disconnect();
                 connected = false;
+                connectionState = ConnectionState::Disconnected;
                 statusMsg = "Disconnected";
                 connectBtn.setLabel("Connect");
                 connectBtn.setColor(sf::Color(100, 255, 100), sf::Color(150, 255, 150));
                 statusIndicator.setFillColor(sf::Color::Red);
-            } else {
-                statusMsg = "Connecting...";
-                if (connection.connect(ipInput.value, settings.network.espPort)) {
-                    settings.network.espIP = ipInput.value;
+            } else if (connectionState == ConnectionState::Disconnected) {
+                // Start async connection
+                connectionState = ConnectionState::Connecting;
+                connectingIP = ipInput.value;
+                connectResult = false;
+                connectFinished = false;
+                ellipsisClock.restart();
+                connectBtn.setLabel("Cancel");
+                connectBtn.setColor(sf::Color(255, 200, 100), sf::Color(255, 220, 150));
+                statusIndicator.setFillColor(sf::Color::Yellow);
+                
+                // Launch connection thread
+                if (connectThread.joinable()) {
+                    connectThread.join();
+                }
+                connectThread = std::thread([&connection, &connectResult, &connectFinished, ip = connectingIP, port = settings.network.espPort]() {
+                    connectResult = connection.connect(ip, port);
+                    connectFinished = true;
+                });
+            } else if (connectionState == ConnectionState::Connecting) {
+                // Cancel connection attempt
+                if (connectThread.joinable()) {
+                    connectThread.join();
+                }
+                connection.disconnect();
+                connectionState = ConnectionState::Disconnected;
+                statusMsg = "Connection cancelled";
+                connectBtn.setLabel("Connect");
+                connectBtn.setColor(sf::Color(100, 255, 100), sf::Color(150, 255, 150));
+                statusIndicator.setFillColor(sf::Color::Red);
+            }
+        }
+        
+        // Check async connection result
+        if (connectionState == ConnectionState::Connecting) {
+            // Animated ellipsis
+            int ellipsisHz = 6; // How many times per second to update the ellipsis
+            int dots = (int)(ellipsisClock.getElapsedTime().asSeconds() * ellipsisHz) % 4;
+            std::string ellipsis(dots, '.');
+            statusMsg = "Connecting" + ellipsis;
+            
+            if (connectFinished) {
+                if (connectThread.joinable()) {
+                    connectThread.join();
+                }
+                if (connectResult) {
+                    settings.network.espIP = connectingIP;
                     connected = true;
-                    statusMsg = "Connected to " + ipInput.value;
+                    connectionState = ConnectionState::Connected;
+                    statusMsg = "Connected to " + connectingIP;
                     connectBtn.setLabel("Disconnect");
                     connectBtn.setColor(sf::Color(255, 100, 100), sf::Color(255, 150, 150));
                     statusIndicator.setFillColor(sf::Color::Green);
                     sender.start(&connection);
                     frameLock.reset();  // Reset frame lock timing on new connection
                 } else {
-                    statusMsg = "Connection failed";
+                    connectionState = ConnectionState::Disconnected;
+                    statusMsg = "Connection timed out";
+                    connectBtn.setLabel("Connect");
+                    connectBtn.setColor(sf::Color(100, 255, 100), sf::Color(150, 255, 150));
+                    statusIndicator.setFillColor(sf::Color::Red);
                 }
             }
         }
@@ -1050,23 +1131,6 @@ int main() {
         // centerDot.setPosition(sf::Vector2f((float)previewX + (float)previewHeight / 2 - 3, (float)previewY + (float)previewWidth / 2 - 3));
         // window.draw(centerDot);
 
-        // Menu bar
-        window.draw(menuBar);
-        ipInput.draw(window);
-        connectBtn.draw(window);
-        skinDropdown.draw(window);
-        refreshBtn.draw(window);
-        frameLockCB.draw(window);
-        flashModeCB.draw(window);
-        flashModeInfo.draw(window);
-        frameLockInfo.draw(window);
-        if (flashModeInfo.isHovered()) {
-            flashDriveInput.draw(window);
-            flashBtn.draw(window);
-        }
-        window.draw(statusIndicator);
-        window.draw(statusIndicatorBorder);
-
         // Show dirty rectangles on preview
         if (connected && settings.preferences.showDirtyRects) {
             std::vector<qualia::DirtyRect> dirtyRects = sender.getLastDirtyRects();
@@ -1093,6 +1157,23 @@ int main() {
                 window.draw(r);
             }
         }
+
+        // Menu bar
+        window.draw(menuBar);
+        ipInput.draw(window);
+        connectBtn.draw(window);
+        skinDropdown.draw(window);
+        refreshBtn.draw(window);
+        frameLockCB.draw(window);
+        flashModeCB.draw(window);
+        flashModeInfo.draw(window);
+        frameLockInfo.draw(window);
+        if (flashModeInfo.isHovered()) {
+            flashDriveInput.draw(window);
+            flashBtn.draw(window);
+        }
+        window.draw(statusIndicator);
+        window.draw(statusIndicatorBorder);  
         
         // Status bar
         window.draw(statusText);
@@ -1120,6 +1201,9 @@ int main() {
     settings.save();
     
     // Clean shutdown
+    if (connectThread.joinable()) {
+        connectThread.join();
+    }
     if (connected) {
         sender.stop();
         connection.disconnect();

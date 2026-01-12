@@ -15,6 +15,8 @@ public:
     
     sf::Texture checkmarkTex;
     std::optional<sf::Sprite> checkmarkSprite;
+
+    bool disabled = false;
     
     Checkbox(float x, float y, float size, const std::string& label, 
              sf::Font& f, float label_offset_x, float label_offset_y, bool defaultChecked = false)
@@ -72,6 +74,9 @@ public:
     // }
     
     void handleEvent(const sf::Event& event, sf::Vector2i mousePos, sf::RenderWindow& window) {
+        if (disabled) {
+            return;
+        }
         const sf::Vector2f mousePosF = window.mapPixelToCoords(mousePos);
         
         if (const auto* buttonPressed = event.getIf<sf::Event::MouseButtonPressed>()) {
@@ -87,7 +92,9 @@ public:
     
     void draw(sf::RenderWindow& window) {
         // Update box appearance based on hover state
-        if (hovered) {
+        if (disabled) {
+            box.setFillColor(sf::Color(220, 220, 220));
+        } else if (hovered) {
             box.setFillColor(sf::Color(240, 240, 240));
         } else {
             box.setFillColor(sf::Color::White);
@@ -104,6 +111,10 @@ public:
     
     bool isChecked() const { return checked; }
     void setChecked(bool value) { checked = value; }
+
+    void setDisabled(bool isDisabled) {
+        disabled = isDisabled;
+    }
 
     void setLabelColor(sf::Color color) {
         labelText.setFillColor(color);

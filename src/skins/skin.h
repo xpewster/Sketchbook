@@ -172,6 +172,7 @@ protected:
 public:
     std::string name;
     std::string xmlFilePath;
+    bool initialized = false;
 
     Skin(std::string name, int width, int height) : name(name), DISPLAY_WIDTH(width), DISPLAY_HEIGHT(height) {} 
 
@@ -198,6 +199,7 @@ public:
         loadFonts();
         loadFlashConfig();
         parametersRefreshed = true;
+        initialized = true;
         return 0;
     }
     
@@ -229,6 +231,7 @@ public:
     // Get flash configuration
     const FlashConfig& getFlashConfig() const { return flashConfig; }
     FlashConfig& getFlashConfig() { return flashConfig; }
+    bool hasFlashConfig() const { return flashConfig.enabledLayers != FlashLayer::None; }
     
     // Get base skin directory (for flash export)
     const std::string& getBaseSkinDir() const { return baseSkinDir; }

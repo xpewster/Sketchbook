@@ -73,6 +73,12 @@ public:
             }
         }
     }
+
+    bool update(sf::Vector2i mousePos, sf::RenderWindow& window) {
+        bool hover = box.getGlobalBounds().contains(window.mapPixelToCoords(mousePos));
+        box.setOutlineColor(hover ? sf::Color(135, 135, 135) : sf::Color(100, 100, 100));
+        return hover;
+    }
     
     void draw(sf::RenderWindow& window) {
         window.draw(box);

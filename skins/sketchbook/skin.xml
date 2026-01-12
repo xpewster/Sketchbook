@@ -56,7 +56,7 @@
             </bobbing>
         </icon>
         <text>
-            <fontindex>0</fontindex>
+            <fontindex>1</fontindex>
             <x>628</x>
             <y>131</y>
             <color>#000000</color>
@@ -75,10 +75,10 @@
                 </text>
                 <icon>
                     <path>icon/cpu.png</path>
-                    <x>584</x>
-                    <y>16</y>
-                    <width>36</width>
-                    <height>36</height>
+                    <x>574</x>
+                    <y>18</y>
+                    <width>34</width>
+                    <height>34</height>
                 </icon>
             </usage>
             <temp>
@@ -90,7 +90,7 @@
                 </text>
                 <icon>
                     <path>icon/temp.png</path>
-                    <x>580</x>
+                    <x>570</x>
                     <y>45</y>
                     <width>30</width>
                     <height>24</height>
@@ -102,16 +102,16 @@
             <usage>
                 <text>
                     <x>630</x>
-                    <y>50</y>
+                    <y>48</y>
                     <color>#000000</color>
                     <size>30</size>
                 </text>
                 <icon>
                     <path>icon/mem.png</path>
-                    <x>575</x>
-                    <y>50</y>
-                    <width>44</width>
-                    <height>38</height>
+                    <x>565</x>
+                    <y>48</y>
+                    <width>42</width>
+                    <height>36</height>
                 </icon>
             </usage>
         </mem>
@@ -119,14 +119,14 @@
             <next>
 				<text>
 					<x>630</x>
-					<y>85</y>
+					<y>81</y>
 					<color>#000000</color>
 					<size>30</size>
 				</text>
                 <icon>
                     <path>icon/train.png</path>
-                    <x>570</x>
-                    <y>72</y>
+                    <x>560</x>
+                    <y>66</y>
                     <width>50</width>
                     <height>50</height>
                 </icon>
@@ -134,7 +134,8 @@
         </train>
     </hwmon>
     <fonts>
-        <font id="0"><ttf>font/COMIC.ttf</ttf></font>
+        <font id="0"><ttf>font/handcaps.ttf</ttf></font>
+        <font id="1"><ttf>font/NationalPark-Outline.ttf</ttf></font>
     </fonts>
     <flash>
         <background>false</background>
