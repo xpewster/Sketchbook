@@ -41,6 +41,7 @@ public:
     void setColor(sf::Color normal, sf::Color hover) {
         normalColor = normal;
         hoverColor = hover;
+        shape.setFillColor(normalColor);
     }
 
     void setIcon(const std::string& filepath, float x, float y, float w, float h) {

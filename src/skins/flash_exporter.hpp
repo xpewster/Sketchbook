@@ -105,6 +105,57 @@ struct FlashStatsMessage {
     }
 };
 
+// Get weather icon index for flash mode
+int getWeatherIconIndex(const WeatherData& weather) {
+    if (!weather.available) return 0xFF;
+    
+    const std::string& weatherType = getWeatherIconNameSimplified(weather);
+    
+    if (weatherType == "sunny") return WEATHER_SUNNY;
+    if (weatherType == "cloudy") return WEATHER_CLOUDY;
+    if (weatherType == "rainy") return WEATHER_RAINY;
+    if (weatherType == "thunderstorm") return WEATHER_THUNDERSTORM;
+    if (weatherType == "foggy") return WEATHER_FOGGY;
+    if (weatherType == "windy") return WEATHER_WINDY;
+    
+    if (weather.isNight) return WEATHER_NIGHT;
+    return WEATHER_SUNNY;
+}
+
+// Build flash stats message from current state
+FlashStatsMessage buildFlashStats(const SystemStats& stats, const WeatherData& weather,
+                                          const TrainData& train, Skin* skin) {
+    FlashStatsMessage msg;
+    
+    msg.weatherIconIndex = getWeatherIconIndex(weather);
+    
+    msg.flags = 0;
+    if (stats.cpuTempC >= skin->getWarmTempThreshold()) {
+        msg.flags |= FlashStatsMessage::FLAG_CPU_WARM;
+    }
+    if (stats.cpuTempC >= skin->getHotTempThreshold()) {
+        msg.flags |= FlashStatsMessage::FLAG_CPU_HOT;
+    }
+    if (weather.available) {
+        msg.flags |= FlashStatsMessage::FLAG_WEATHER_AVAIL;
+    }
+    if (train.available0) {
+        msg.flags |= FlashStatsMessage::FLAG_TRAIN0_AVAIL;
+    }
+    if (train.available1) {
+        msg.flags |= FlashStatsMessage::FLAG_TRAIN1_AVAIL;
+    }
+    
+    msg.cpuPercent10 = static_cast<uint16_t>(stats.cpuPercent * 10);
+    msg.cpuTemp10 = static_cast<uint16_t>(stats.cpuTempC * 10);
+    msg.memPercent10 = static_cast<uint16_t>(stats.memPercent * 10);
+    msg.weatherTemp10 = static_cast<int16_t>(weather.currentTemp * 10);
+    msg.train0Mins10 = static_cast<uint16_t>(train.minsToNextTrain0 * 10);
+    msg.train1Mins10 = static_cast<uint16_t>(train.minsToNextTrain1 * 10);
+    
+    return msg;
+}
+
 // Abstract base class for flash exporters
 // Each skin type can implement its own exporter
 class FlashExporter {

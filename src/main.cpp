@@ -9,6 +9,9 @@
 #include "dirty_rects.hpp"
 #include "tcp.hpp"
 #include "tray.hpp"
+#include "utils/rgb565.h"
+#include "limit_instance.h"
+#include "startup.hpp"
 
 #include <SFML/Graphics.hpp>
 #include <Shlobj.h>
@@ -17,10 +20,7 @@
 #include <string>
 #include <iostream>
 #include <thread>
-#include <mutex>
 #include <atomic>
-#include <condition_variable>
-#include <deque>
 #include <format>
 
 #include "ui/text_box.cpp"
@@ -36,453 +36,25 @@
 #include "settings.hpp"
 #include "weather.hpp"
 #include "train.hpp"
+#include "frame.hpp"
+#include "framelock.hpp"
 
 // Transparent color key for flash mode (magenta = 0xF81F)
 const sf::Color FLASH_TRANSPARENT_COLOR(248, 0, 248);
 constexpr uint16_t FLASH_TRANSPARENT_RGB565 = 0xF81F;
 
 
-
-// Threaded frame sender with frame lock support
-class FrameSender {
-public:
-    FrameSender(int fpsWindow = 10) 
-        : running_(false), frameReady_(false), sendError_(false), fpsWindow_(fpsWindow),
-          frameConsumed_(false) {}
-    
-    ~FrameSender() {
-        stop();
-    }
-    
-    void start(TcpConnection* conn) {
-        connection_ = conn;
-        running_ = true;
-        sendError_ = false;
-        frameConsumed_ = false;
-        dirtyTracker_.invalidate();  // Reset tracker on new connection
-        sendThread_ = std::thread(&FrameSender::sendLoop, this);
-    }
-    
-    void stop() {
-        {
-            std::lock_guard<std::mutex> lock(mutex_);
-            running_ = false;
-        }
-        cv_.notify_one();
-        if (sendThread_.joinable()) {
-            sendThread_.join();
-        }
-    }
-    
-    // Queue a frame for sending (called from main thread)
-    void queueFrame(const qualia::Image& frame) {
-        {
-            std::lock_guard<std::mutex> lock(mutex_);
-            pendingFrame_ = frame;
-            frameReady_ = true;
-            flashMode_ = false;
-        }
-        cv_.notify_one();
-    }
-    
-    // Queue a flash mode update (stats + optional dirty rects)
-    void queueFlashUpdate(const flash::FlashStatsMessage& stats, 
-                          const qualia::Image& frame) {
-        {
-            std::lock_guard<std::mutex> lock(mutex_);
-            pendingFlashStats_ = stats;
-            pendingFrame_ = frame;
-            frameReady_ = true;
-            flashMode_ = true;
-        }
-        cv_.notify_one();
-    }
-    
-    // Check if sender is ready for next frame (for frame lock mode)
-    bool isReadyForFrame() const {
-        std::lock_guard<std::mutex> lock(mutex_);
-        return !frameReady_;
-    }
-    
-    // Check and clear the frame consumed flag (for frame lock mode)
-    bool checkAndClearFrameConsumed() {
-        std::lock_guard<std::mutex> lock(consumedMutex_);
-        bool consumed = frameConsumed_;
-        frameConsumed_ = false;
-        return consumed;
-    }
-    
-    // Get current FPS (thread-safe)
-    double getFPS() const {
-        std::lock_guard<std::mutex> lock(fpsMutex_);
-        
-        while (!frameTimestamps_.empty()) {
-            if (frameTimestamps_.size() > fpsWindow_) {
-                frameTimestamps_.pop_front();
-            } else {
-                break;
-            }
-        }
-
-        if (frameTimestamps_.empty()) {
-            return 0.0;
-        }
-
-        auto latest = frameTimestamps_.back();
-        double timeSpan = std::chrono::duration<double>(latest - frameTimestamps_.front()).count();
-        return timeSpan > 0.0 ? frameTimestamps_.size() / timeSpan : 0.0;
-    }
-    
-    // Get compression stats
-    float getCompressionRatio() const {
-        std::lock_guard<std::mutex> lock(statsMutex_);
-        return lastCompressionRatio_;
-    }
-    
-    int getLastRectCount() const {
-        std::lock_guard<std::mutex> lock(statsMutex_);
-        return lastRectCount_;
-    }
-    
-    size_t getLastPacketSize() const {
-        std::lock_guard<std::mutex> lock(statsMutex_);
-        return lastPacketSize_;
-    }
-
-    // For debugging: get dirty rectangles from last frame
-    std::vector<qualia::DirtyRect> getLastDirtyRects() const {
-        std::lock_guard<std::mutex> lock(statsMutex_);
-        return lastDirtyRects_;
-    }
-    
-    bool hadError() const { return sendError_; }
-    void clearError() { sendError_ = false; }
-    
-private:
-    void sendLoop() {
-        while (true) {
-            std::unique_lock<std::mutex> lock(mutex_);
-            cv_.wait(lock, [this] { return frameReady_ || !running_; });
-            
-            if (!running_) break;
-            
-            if (frameReady_) {
-                // Copy data while holding lock
-                qualia::Image frameToSend = std::move(pendingFrame_);
-                bool isFlashMode = flashMode_;
-                flash::FlashStatsMessage flashStats = pendingFlashStats_;
-                // Don't set frameReady_ = false yet - wait for ACK first
-                lock.unlock();
-                
-                bool sendSuccess = false;
-                
-                if (isFlashMode) {
-                    // Flash mode: send stats + dirty rects
-                    sendSuccess = sendFlashUpdate(flashStats, frameToSend);
-                } else {
-                    // Normal mode: send dirty rects
-                    sendSuccess = sendNormalFrame(frameToSend);
-                }
-                
-                if (sendSuccess) {
-                    // Wait for ACK from remote
-                    if (connection_->waitForAck(5000)) {
-                        recordFrameSent();
-                        // Now mark frame as consumed - main thread can queue next
-                        {
-                            std::lock_guard<std::mutex> l(mutex_);
-                            frameReady_ = false;
-                        }
-                        {
-                            std::lock_guard<std::mutex> consumedLock(consumedMutex_);
-                            frameConsumed_ = true;
-                        }
-                    } else {
-                        // ACK timeout - connection problem
-                        sendError_ = true;
-                        {
-                            std::lock_guard<std::mutex> l(mutex_);
-                            frameReady_ = false;  // Clear so we don't retry
-                        }
-                    }
-                } else {
-                    sendError_ = true;
-                    {
-                        std::lock_guard<std::mutex> l(mutex_);
-                        frameReady_ = false;  // Clear so we don't retry
-                    }
-                }
-            }
-        }
-    }
-    
-    bool sendNormalFrame(const qualia::Image& frame) {
-        // Find dirty rectangles
-        auto rects = dirtyTracker_.findDirtyRects(frame);
-        
-        // Build packet with dirty rect protocol
-        std::vector<uint8_t> packet = dirtyTracker_.buildPacket(frame, rects);
-        
-        // Update stats
-        {
-            std::lock_guard<std::mutex> slock(statsMutex_);
-            auto stats = dirtyTracker_.getLastStats(rects);
-            lastCompressionRatio_ = stats.compressionRatio;
-            lastRectCount_ = stats.rectCount;
-            lastPacketSize_ = packet.size();
-            lastDirtyRects_ = rects;
-        }
-        
-        return connection_->sendPacket(packet.data(), packet.size());
-    }
-    
-    bool sendFlashUpdate(const flash::FlashStatsMessage& stats,
-                         const qualia::Image& frame) {
-        // Find dirty rects using normal comparison
-        auto rects = dirtyTracker_.findDirtyRects(frame);
-        
-        // Build flash stats header
-        uint8_t rectCount = min((size_t)255, rects.size());
-        std::vector<uint8_t> header = stats.serialize(rectCount);
-        
-        // Build dirty rect data (same format as normal mode)
-        std::vector<uint8_t> rectData;
-        if (rectCount > 0) {
-            // Rect headers
-            for (size_t i = 0; i < rectCount; i++) {
-                const auto& r = rects[i];
-                rectData.push_back(r.x & 0xFF);
-                rectData.push_back((r.x >> 8) & 0xFF);
-                rectData.push_back(r.y & 0xFF);
-                rectData.push_back((r.y >> 8) & 0xFF);
-                rectData.push_back(r.w & 0xFF);
-                rectData.push_back((r.w >> 8) & 0xFF);
-                rectData.push_back(r.h & 0xFF);
-                rectData.push_back((r.h >> 8) & 0xFF);
-            }
-            
-            // Rect pixel data
-            for (size_t i = 0; i < rectCount; i++) {
-                const auto& r = rects[i];
-                for (int y = r.y; y < r.y + r.h; y++) {
-                    for (int x = r.x; x < r.x + r.w; x++) {
-                        uint16_t px = frame.getPixel(x, y);
-                        rectData.push_back(px & 0xFF);
-                        rectData.push_back((px >> 8) & 0xFF);
-                    }
-                }
-            }
-        }
-        
-        // Combine and send
-        std::vector<uint8_t> packet;
-        packet.reserve(header.size() + rectData.size());
-        packet.insert(packet.end(), header.begin(), header.end());
-        packet.insert(packet.end(), rectData.begin(), rectData.end());
-        
-        // Update stats
-        {
-            std::lock_guard<std::mutex> slock(statsMutex_);
-            lastCompressionRatio_ = (float)rectCount / 100.0f;  // Rough indicator
-            lastRectCount_ = rectCount;
-            lastPacketSize_ = packet.size();
-            lastDirtyRects_ = rects;
-        }
-        
-        return connection_->sendPacket(packet.data(), packet.size());
-    }
-    
-    void recordFrameSent() {
-        std::lock_guard<std::mutex> lock(fpsMutex_);
-        frameTimestamps_.push_back(std::chrono::steady_clock::now());
-    }
-    
-    TcpConnection* connection_ = nullptr;
-    std::thread sendThread_;
-    mutable std::mutex mutex_;
-    std::condition_variable cv_;
-    qualia::Image pendingFrame_;
-    std::atomic<bool> running_;
-    std::atomic<bool> frameReady_;
-    std::atomic<bool> sendError_;
-    
-    // Flash mode pending data
-    bool flashMode_ = false;
-    flash::FlashStatsMessage pendingFlashStats_;
-    
-    // Frame consumed signaling (for frame lock)
-    mutable std::mutex consumedMutex_;
-    bool frameConsumed_;
-    
-    // Dirty rect tracker
-    qualia::DirtyRectTracker dirtyTracker_;
-    std::vector<qualia::DirtyRect> lastDirtyRects_;
-
-    // FPS tracking
-    const int fpsWindow_;
-    mutable std::mutex fpsMutex_;
-    mutable std::deque<std::chrono::steady_clock::time_point> frameTimestamps_;
-    
-    // Stats
-    mutable std::mutex statsMutex_;
-    float lastCompressionRatio_ = 1.0f;
-    int lastRectCount_ = 0;
-    size_t lastPacketSize_ = 0;
-};
-
-// Frame lock controller - manages animation timing when frame lock is enabled
-class FrameLockController {
-public:
-    FrameLockController(double targetFPS = 20.0) 
-        : targetFPS_(targetFPS), frameBudget_(1.0 / targetFPS),
-          lockedTime_(0.0), budgetRemaining_(0.0), wallTime_(0.0),
-          lastUpdateTime_(std::chrono::steady_clock::now()) {}
-    
-    void update() {
-        auto now = std::chrono::steady_clock::now();
-        double deltaWall = std::chrono::duration<double>(now - lastUpdateTime_).count();
-        lastUpdateTime_ = now;
-        
-        // Always track wall time for real-time preview
-        wallTime_ += deltaWall;
-        
-        // Advance locked time within budget
-        double advance = min(deltaWall, budgetRemaining_);
-        lockedTime_ += advance;
-        budgetRemaining_ = max(0.0, budgetRemaining_ - deltaWall);
-    }
-    
-    // Call when sender consumes a frame - replenishes the time budget
-    void onFrameConsumed() {
-        budgetRemaining_ = frameBudget_;
-    }
-    
-    // Get animation time for locked (sent) frames
-    double getLockedTime() const { return lockedTime_; }
-    
-    // Get animation time for real-time preview (wall clock)
-    double getWallTime() const { return wallTime_; }
-    
-    // Check if animation is currently frozen (budget exhausted)
-    bool isFrozen() const { return budgetRemaining_ <= 0.0; }
-    
-    void reset() {
-        lockedTime_ = 0.0;
-        budgetRemaining_ = frameBudget_;
-        wallTime_ = 0.0;
-        lastUpdateTime_ = std::chrono::steady_clock::now();
-    }
-    
-    void setTargetFPS(double fps) {
-        targetFPS_ = fps;
-        frameBudget_ = 1.0 / fps;
-    }
-    
-private:
-    double targetFPS_;
-    double frameBudget_;      // Time budget per frame (1/targetFPS)
-    double lockedTime_;       // Animation time for locked frames
-    double budgetRemaining_;  // Time budget remaining before freeze
-    double wallTime_;         // Real wall-clock time for preview
-    std::chrono::steady_clock::time_point lastUpdateTime_;
-};
-
-// Convert RenderTexture to RGB565 for Qualia
-void textureToRGB565(sf::RenderTexture& texture, qualia::Image& image) {
-    sf::Image sfImg = texture.getTexture().copyToImage();
-    
-    for (int y = 0; y < image.height; y++) {
-        for (int x = 0; x < image.width; x++) {
-            sf::Color c = sfImg.getPixel(sf::Vector2u(x, y));
-            image.at(x, y) = qualia::rgb565(c.r, c.g, c.b);
-        }
-    }
-}
-
-// Rotate 90 degrees clockwise during conversion
-void textureToRGB565Rot90(sf::RenderTexture& texture, qualia::Image& image) {
-    sf::Image sfImg = texture.getTexture().copyToImage();
-    
-    // texture is (height, width), output is (width, height)
-    // Output pixel (x, y) comes from input pixel (y, width-1-x)
-    for (int y = 0; y < image.height; y++) {
-        for (int x = 0; x < image.width; x++) {
-            sf::Color c = sfImg.getPixel(sf::Vector2u(y, image.width - 1 - x));
-            image.at(x, y) = qualia::rgb565(c.r, c.g, c.b);
-        }
-    }
-}
-
-// Rotate 90 degrees counter-clockwise during conversion  
-void textureToRGB565RotNeg90(sf::RenderTexture& texture, qualia::Image& image) {
-    sf::Image sfImg = texture.getTexture().copyToImage();
-    
-    // Output pixel (x, y) comes from input pixel (height-1-y, x)
-    for (int y = 0; y < image.height; y++) {
-        for (int x = 0; x < image.width; x++) {
-            sf::Color c = sfImg.getPixel(sf::Vector2u(image.height - 1 - y, x));
-            image.at(x, y) = qualia::rgb565(c.r, c.g, c.b);
-        }
-    }
-}
-
-// Get weather icon index for flash mode
-int getWeatherIconIndex(const WeatherData& weather) {
-    if (!weather.available) return 0xFF;
-    
-    const std::string& weatherType = getWeatherIconNameSimplified(weather);
-    
-    if (weatherType == "sunny") return flash::WEATHER_SUNNY;
-    if (weatherType == "cloudy") return flash::WEATHER_CLOUDY;
-    if (weatherType == "rainy") return flash::WEATHER_RAINY;
-    if (weatherType == "thunderstorm") return flash::WEATHER_THUNDERSTORM;
-    if (weatherType == "foggy") return flash::WEATHER_FOGGY;
-    if (weatherType == "windy") return flash::WEATHER_WINDY;
-    
-    if (weather.isNight) return flash::WEATHER_NIGHT;
-    return flash::WEATHER_SUNNY;
-}
-
-// Build flash stats message from current state
-flash::FlashStatsMessage buildFlashStats(const SystemStats& stats, const WeatherData& weather,
-                                          const TrainData& train, Skin* skin) {
-    flash::FlashStatsMessage msg;
-    
-    msg.weatherIconIndex = getWeatherIconIndex(weather);
-    
-    msg.flags = 0;
-    if (stats.cpuTempC >= skin->getWarmTempThreshold()) {
-        msg.flags |= flash::FlashStatsMessage::FLAG_CPU_WARM;
-    }
-    if (stats.cpuTempC >= skin->getHotTempThreshold()) {
-        msg.flags |= flash::FlashStatsMessage::FLAG_CPU_HOT;
-    }
-    if (weather.available) {
-        msg.flags |= flash::FlashStatsMessage::FLAG_WEATHER_AVAIL;
-    }
-    if (train.available0) {
-        msg.flags |= flash::FlashStatsMessage::FLAG_TRAIN0_AVAIL;
-    }
-    if (train.available1) {
-        msg.flags |= flash::FlashStatsMessage::FLAG_TRAIN1_AVAIL;
-    }
-    
-    msg.cpuPercent10 = static_cast<uint16_t>(stats.cpuPercent * 10);
-    msg.cpuTemp10 = static_cast<uint16_t>(stats.cpuTempC * 10);
-    msg.memPercent10 = static_cast<uint16_t>(stats.memPercent * 10);
-    msg.weatherTemp10 = static_cast<int16_t>(weather.currentTemp * 10);
-    msg.train0Mins10 = static_cast<uint16_t>(train.minsToNextTrain0 * 10);
-    msg.train1Mins10 = static_cast<uint16_t>(train.minsToNextTrain1 * 10);
-    
-    return msg;
-}
-
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
     PSTR lpCmdLine, int nCmdShow)
 {
+    CLimitSingleInstance lsi(TEXT("Global\\7c516a5a-76a0-4f12-8619-41570c33082c"));
+    if(lsi.IsAnotherInstanceRunning()) {
+        LOG_ERROR << "Another instance of Sketchbook is already running. Exiting.\n";
+        return 0;
+    }
     if (!IsUserAnAdmin()) {
         LOG_ERROR << "This application must be run as administrator.\n";
-        return 1;
+        return 0;
     }
     setlocale(LC_ALL, "");
 
@@ -491,35 +63,49 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
     Settings settings;
     if (!settings.load()) {
         LOG_ERROR << "Failed to load settings.toml\n";
-        return 1;
+        return 0;
     }
 
     if (settings.weather.apiKey == "YOUR_API_KEY_HERE" || settings.weather.apiKey.empty()) {
         LOG_WARN << "Please set your OpenWeatherMap API key in settings.toml\n";
-        return 1;
     }
 
     LOG_INFO << "Successfully loaded settings.\n";
 
+    // Initialize startup manager
+    StartupManager startupManager(L"Sketchbook");
+    bool isStartupMinimized = startupManager.IsInStartup() && startupManager.IsStartupMinimized();
+    if (settings.preferences.startMinimized != isStartupMinimized) {
+        LOG_WARN << "Startup minimized setting mismatch. Using windows setting " << isStartupMinimized << "\n";
+        settings.preferences.startMinimized = isStartupMinimized;
+    }
+
+    // Initialize main window
     const int menuHeight = 40;
     const int previewScale = 1;
     const int previewWidth = qualia::DISPLAY_HEIGHT / previewScale; // Use DISPLAY_HEIGHT since the preview will be rotated 90 degrees
     const int previewHeight = qualia::DISPLAY_WIDTH / previewScale; // Use DISPLAY_WIDTH since the preview will be rotated 90 degrees
     const int windowWidth = previewWidth + 40; 
     const int windowHeight = menuHeight + previewHeight + 50;
-    
+
     sf::RenderWindow window(sf::VideoMode(sf::Vector2u(windowWidth, windowHeight)), "Sketchbook", sf::Style::Titlebar | sf::Style::Close);
-    
-    // Initialize tray manager (runs in its own thread)
-    HWND hwnd = window.getNativeHandle();
-    TrayManager trayManager(hwnd);
     window.setFramerateLimit(30);
-    
+    HWND hwnd = window.getNativeHandle();
+    if (isStartupMinimized) {
+        LOG_INFO << "Starting minimized on startup.\n";
+        // window.setVisible(false);
+        ShowWindow(hwnd, SW_HIDE);
+    }
+
+    // Initialize tray manager (runs in its own thread)
+    TrayManager trayManager(hwnd);
+    LOG_INFO << "Initialized system tray manager.\n";
+
     // Load font
     sf::Font font;
     if (!font.openFromFile("C:/Windows/Fonts/times.ttf")) {
         LOG_ERROR << "Failed to load default font\n";
-        return 1;
+        return 0;
     }
 
     std::unordered_map<std::string, Skin*> skins;
@@ -632,11 +218,14 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
     Checkbox previewCompositeCB(previewCompositeCBX0, (float)(windowHeight - 22), 12, "Preview composite", font, 4, -2, true);
     previewCompositeCB.setLabelColor(sf::Color::White);
     InfoIcon settingsInfo((float)(windowWidth - 50), 10, 15, "resources/Settings.png", "Settings", font, InfoBoxDirection::Left);
-    settingsInfo.setExtraHeight(60);
+    settingsInfo.setExtraHeight(130);
     settingsInfo.enableHoverOverBox(true);
-    bool startupSettingChecked = false;
-    Checkbox startupSettingCB((float)(windowWidth - 200), 64, 12, "Start with Windows", font, 4, -2, startupSettingChecked);
-    Checkbox closeToTraySettingCB((float)(windowWidth - 200), 84, 12, "Close to tray", font, 4, -2, settings.preferences.closeToTray);
+    Checkbox startupSettingCB((float)(windowWidth - 200), 64, 12, "Start with Windows", font, 4, -2, startupManager.IsInStartup());
+    Checkbox startMinimizedSettingCB((float)(windowWidth - 200), 84, 12, "Start minimized", font, 4, -2, settings.preferences.startMinimized);
+    Checkbox closeToTraySettingCB((float)(windowWidth - 200), 104, 12, "Close to tray", font, 4, -2, settings.preferences.closeToTray);
+    Checkbox autoConnectSettingCB((float)(windowWidth - 200), 124, 12, "AutoConnect", font, 4, -2, settings.preferences.autoConnect);
+    Button resetBoardSettingsBtn((float)(windowWidth - 200), 144, 90, 24, "Reset board", font);
+    resetBoardSettingsBtn.setColor(sf::Color(235, 180, 52), sf::Color(245, 205, 86));
     
     // Status indicator
     sf::CircleShape statusIndicator(8);
@@ -685,6 +274,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
     std::string connectingIP;
     sf::Clock ellipsisClock;
     sf::Clock logFlushClock;
+    sf::Clock lastConnectAttemptClock;
+    bool firstConnectionAttempt = true; // Allow immediate first attempt without waiting
 
     while (window.isOpen()) {
 
@@ -765,12 +356,43 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
             settingsInfo.handleEvent(*event, mousePos, window);
             if (settingsInfo.isHovered()) {
                 startupSettingCB.handleEvent(*event, mousePos, window);
+                startMinimizedSettingCB.handleEvent(*event, mousePos, window);
+                settings.preferences.startMinimized = startMinimizedSettingCB.isChecked();
+                if (startMinimizedSettingCB.wasJustUpdated() && startupManager.IsInStartup()) {
+                    LOG_INFO << "Startup already exists. Updating startup shortcut to " << (settings.preferences.startMinimized ? "start minimized" : "not start minimized") << ".\n";
+                    if (startupManager.UpdateStartupSettings(settings.preferences.startMinimized)) {
+                        LOG_INFO << "Updated startup shortcut successfully.\n";
+                    } else {
+                        LOG_ERROR << "Failed to update startup shortcut.\n";
+                    }
+                }
                 closeToTraySettingCB.handleEvent(*event, mousePos, window);
                 settings.preferences.closeToTray = closeToTraySettingCB.isChecked();
+                autoConnectSettingCB.handleEvent(*event, mousePos, window);
+                settings.preferences.autoConnect = autoConnectSettingCB.isChecked();
+                if (startupSettingCB.wasJustUpdated()) {
+                    if (startupSettingCB.isChecked()) {
+                        if (startupManager.IsInStartup(true)) {
+                            LOG_INFO << "Already in Windows startup.\n";
+                        } else if (startupManager.AddToStartup(settings.preferences.startMinimized)) {
+                            LOG_INFO << "Added to Windows startup successfully.\n";
+                        } else {
+                            LOG_ERROR << "Failed to add to Windows startup.\n";
+                            startupSettingCB.setChecked(false);
+                        }
+                    } else {
+                        if (!startupManager.IsInStartup(true)) {
+                            LOG_INFO << "Already not in Windows startup.\n";
+                        } else if (startupManager.RemoveFromStartup()) {
+                            LOG_INFO << "Removed from Windows startup successfully.\n";
+                        } else {
+                            LOG_ERROR << "Failed to remove from Windows startup.\n";
+                            startupSettingCB.setChecked(true);
+                        }
+                    }
+                }
             }
         }
-
-
         ipInput.update(mousePos, window);
         skinDropdown.update(mousePos, window);
         flashDriveInput.update(mousePos, window);
@@ -860,6 +482,20 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
                 }
             }
         }
+
+        if (resetBoardSettingsBtn.update(mousePos, mousePressed, window)) {
+            if (connected) {
+                LOG_INFO << "Resetting board...\n";
+                if (sender.sendReset()) {
+                    LOG_INFO << "Reset command sent successfully.\n";
+                } else {
+                    LOG_ERROR << "Failed to send reset command.\n";
+                    statusMsg = "Failed to send reset command";
+                }
+            } else {
+                statusMsg = "Not connected - cannot reset board";
+            }
+        }
         
         // Check for send errors from background thread
         if (connected && sender.hadError()) {
@@ -874,6 +510,12 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
             statusIndicator.setFillColor(sf::Color::Red);
             sender.clearError();
         }
+
+        if (settings.preferences.autoConnect && connectionState == ConnectionState::Disconnected && (firstConnectionAttempt || lastConnectAttemptClock.getElapsedTime().asSeconds() > 5.0f)) {
+            LOG_INFO << "AutoConnecting...\n";
+            goto Connect;
+            firstConnectionAttempt = false;
+        }
         
         // Connect button
         if (connectBtn.update(mousePos, mousePressed, window)) {
@@ -887,6 +529,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
                 connectBtn.setColor(sf::Color(100, 255, 100), sf::Color(150, 255, 150));
                 statusIndicator.setFillColor(sf::Color::Red);
             } else if (connectionState == ConnectionState::Disconnected) {
+                Connect:
                 // Start async connection
                 connectionState = ConnectionState::Connecting;
                 connectingIP = ipInput.value;
@@ -906,6 +549,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
                     LOG_INFO << "Connection attempt to " << ip << ":" << port << (connectResult ? " succeeded" : " failed") << "\n";
                     connectFinished = true;
                 });
+                lastConnectAttemptClock.restart();
             } else if (connectionState == ConnectionState::Connecting) {
                 // Cancel connection attempt
                 if (connectThread.joinable()) {
@@ -950,6 +594,10 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
                     statusIndicator.setFillColor(sf::Color::Red);
                 }
             }
+        }
+
+        if (connected) {
+            firstConnectionAttempt = true; // Allow immediate reconnect after a successful connection
         }
 
         if (refreshBtn.update(mousePos, mousePressed, window)) {
@@ -1014,7 +662,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
                     }
                     
                     if (isFlashModeActive) {
-                        auto flashStats = buildFlashStats(stats, weather, train, skins[skinName]);
+                        auto flashStats = flash::buildFlashStats(stats, weather, train, skins[skinName]);
                         sender.queueFlashUpdate(flashStats, frameBuffer);
                     } else {
                         sender.queueFrame(frameBuffer);
@@ -1044,7 +692,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
                     }
                     
                     if (isFlashModeActive) {
-                        auto flashStats = buildFlashStats(stats, weather, train, skins[skinName]);
+                        auto flashStats = flash::buildFlashStats(stats, weather, train, skins[skinName]);
                         sender.queueFlashUpdate(flashStats, frameBuffer);
                         // Re-render with composite for preview if needed
                         if (skins[skinName]->getFlashConfig().previewComposite) {
@@ -1087,7 +735,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
                 }
                 
                 if (isFlashModeActive) {
-                    auto flashStats = buildFlashStats(stats, weather, train, skins[skinName]);
+                    auto flashStats = flash::buildFlashStats(stats, weather, train, skins[skinName]);
                     sender.queueFlashUpdate(flashStats, frameBuffer);
                     // Re-render with composite for preview if needed
                     if (skins[skinName]->getFlashConfig().previewComposite) {
@@ -1172,7 +820,10 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
         settingsInfo.draw(window);
         if (settingsInfo.isHovered()) {
             startupSettingCB.draw(window);
+            startMinimizedSettingCB.draw(window);
             closeToTraySettingCB.draw(window);
+            autoConnectSettingCB.draw(window);
+            resetBoardSettingsBtn.draw(window);
         }
         window.draw(statusIndicator);
         window.draw(statusIndicatorBorder);  

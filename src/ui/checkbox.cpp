@@ -3,7 +3,7 @@
 #include <optional>
 
 class Checkbox {
-public:
+private:
     sf::RectangleShape box;
     sf::Text labelText;
     bool checked = false;
@@ -17,7 +17,11 @@ public:
     std::optional<sf::Sprite> checkmarkSprite;
 
     bool disabled = false;
-    
+
+    bool wasJustUpdated_ = false; // Flag to track if the checkbox was just checked in the current event loop
+
+public:
+
     Checkbox(float x, float y, float size, const std::string& label, 
              sf::Font& f, float label_offset_x, float label_offset_y, bool defaultChecked = false)
         : checked(defaultChecked), font(f), position(x, y), 
@@ -82,6 +86,7 @@ public:
         if (const auto* buttonPressed = event.getIf<sf::Event::MouseButtonPressed>()) {
             if (box.getGlobalBounds().contains(mousePosF)) {
                 checked = !checked;
+                wasJustUpdated_ = true;
             }
         }
         
@@ -110,7 +115,16 @@ public:
     }
     
     bool isChecked() const { return checked; }
-    void setChecked(bool value) { checked = value; }
+    void setChecked(bool value, bool updateEvent = false) { checked = value; if (updateEvent) { wasJustUpdated_ = true; } }
+
+    // Returns if there was just an update event and consumes the event.
+    bool wasJustUpdated() {
+        if (wasJustUpdated_) {
+            wasJustUpdated_ = false;
+            return true;
+        }
+        return false;
+    }
 
     void setDisabled(bool isDisabled) {
         disabled = isDisabled;
