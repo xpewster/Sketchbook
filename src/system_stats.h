@@ -13,6 +13,8 @@
 #include "IPlatform.h"
 #include "IDeviceManager.h"
 
+#include "log.hpp"
+
 
 typedef IPlatform& (__stdcall* GetPlatformFunc)();
 
@@ -37,7 +39,7 @@ public:
         // Ryzen Master SDK setup
         initRyzenSDK();
 
-        std::cout << "SystemMonitor initialized successfully\n";
+        LOG_INFO << "SystemMonitor initialized successfully\n";
     }
     
     ~SystemMonitor() {
@@ -71,10 +73,10 @@ public:
                     }
                     cachedCpuTemp_ = maxTemp;
                 } else {
-                    std::cout << "Failed to get CPU parameters from Ryzen SDK\n";
+                    LOG_ERROR << "Failed to get CPU parameters from Ryzen SDK\n";
                 }
             }
-            // std::cout << "Updated CPU stats: " << cachedCpuPercent_ << "%, " << cachedCpuTemp_ << "C\n";
+            // LOG_INFO << "Updated CPU stats: " << cachedCpuPercent_ << "%, " << cachedCpuTemp_ << "C\n";
             
             lastCollectTime_ = now;
         }
@@ -101,10 +103,10 @@ private:
         if (!g_GetRegistryValue(HKEY_LOCAL_MACHINE, 
                               L"Software\\AMD\\RyzenMasterMonitoringSDK", 
                               L"InstallationPath", installPath, temp)) {
-            std::cout << "Unexpected Error E1001. Please reinstall AMDRyzenMasterMonitoringSDK\n";
+            LOG_ERROR << "Unexpected Error E1001. Please reinstall AMDRyzenMasterMonitoringSDK\n";
             return; // SDK not installed
         } else {
-            std::wcout << L"Found Ryzen Master SDK at: " << installPath << L"\n";
+            LOG_INFO << "Found Ryzen Master SDK at: " << installPath << "\n";
         }
         
         std::wstring binPath = installPath + L"bin";
@@ -115,9 +117,9 @@ private:
         hPlatformDLL_ = LoadLibraryEx(path, NULL, 0);
         if (!hPlatformDLL_) {
             DWORD error = GetLastError();
-            std::cout << "LoadLibrary failed with error code: " << error << "\n";
-            std::wcout << L"Failed to load Platform.dll from: " << path << L"\n";
-            std::cout << "Unexpected Error E1004. Please reinstall AMDRyzenMasterMonitoringSDK\n";
+            LOG_ERROR << "LoadLibrary failed with error code: " << error << "\n";
+            LOG_ERROR << "Failed to load Platform.dll from: " << path << "\n";
+            LOG_ERROR << "Unexpected Error E1004. Please reinstall AMDRyzenMasterMonitoringSDK\n";
             return;
         }
 
@@ -125,13 +127,13 @@ private:
         
         GetPlatformFunc getPlatform = (GetPlatformFunc)GetProcAddress(hPlatformDLL_, "GetPlatform");
         if (!getPlatform) {
-            std::cout << "Platform not found\n";
+            LOG_ERROR << "Platform not found\n";
             return;
         }
         
         IPlatform& platform = getPlatform();
         if (!platform.Init()) {
-            std::cout << "Platform init failed\n";
+            LOG_ERROR << "Platform init failed\n";
             return;
         }
         
@@ -139,7 +141,7 @@ private:
         cpuInterface_ = (ICPUEx*)deviceMgr.GetDevice(dtCPU, 0);
 
         const auto name = (PWCHAR)cpuInterface_->GetName();
-        std::wcout << L"Using CPU: " << name << L"\n";
+        LOG_INFO << "Using CPU: " << name << "\n";
 
         cpuInterface_->GetCorePark(uCorePark);
     }

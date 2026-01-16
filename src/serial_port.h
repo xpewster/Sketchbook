@@ -5,6 +5,7 @@
 #include <vector>
 #include <chrono>
 
+#include "log.hpp"
 #include "image.hpp"
 #include <windows.h>
 
@@ -210,12 +211,12 @@ public:
         
         char response[2] = {};
         if (!serial_.readExact(response, 2)) {
-            std::cerr << "Ping: No response\n";
+            LOG_WARN << "Ping: No response\n";
             return false;
         }
         
         if (response[0] != 'O' || response[1] != 'K') {
-            std::cerr << "Ping: Unexpected response: " 
+            LOG_WARN << "Ping: Unexpected response: " 
                       << (int)response[0] << " " << (int)response[1] << "\n";
             return false;
         }
@@ -230,11 +231,11 @@ public:
         auto startTime = std::chrono::high_resolution_clock::now();
 
         if (!serial_.isOpen()) {
-            std::cerr << "Error: Serial port not open\n";
+            LOG_WARN << "Error: Serial port not open\n";
             return false;
         }
         if (image.width != DISPLAY_WIDTH || image.height != DISPLAY_HEIGHT) {
-            std::cerr << "Error: Image size mismatch. Expected " 
+            LOG_WARN << "Error: Image size mismatch. Expected " 
                       << DISPLAY_WIDTH << "x" << DISPLAY_HEIGHT 
                       << ", got " << image.width << "x" << image.height << "\n";
             return false;
@@ -246,7 +247,7 @@ public:
         header[4] = CMD_FRAME_FULL;
         
         if (serial_.write(header, sizeof(header)) != sizeof(header)) {
-            std::cerr << "Error: Failed to write header\n";
+            LOG_WARN << "Error: Failed to write header\n";
             return false;
         }
         serial_.flush();
@@ -256,11 +257,11 @@ public:
         // Poll for RD response
         char response[2] = {};
         if (!serial_.readExact(response, 2)) {
-            std::cerr << "Error: Timeout waiting for RD response\n";
+            LOG_WARN << "Error: Timeout waiting for RD response\n";
             return false;
         }
         if (response[0] != 'R' || response[1] != 'D') {
-            std::cerr << "Error: Unexpected response (expected RD): " 
+            LOG_WARN << "Error: Unexpected response (expected RD): " 
                       << (int)(unsigned char)response[0] << " " 
                       << (int)(unsigned char)response[1] << "\n";
             return false;
@@ -270,7 +271,7 @@ public:
         
         // Send pixel data directly
         if (!serial_.writeAll(image.data(), image.dataSize())) {
-            std::cerr << "Error: Failed to write pixel data\n";
+            LOG_WARN << "Error: Failed to write pixel data\n";
             return false;
         }
         serial_.flush();
@@ -279,12 +280,12 @@ public:
         
         // Poll for OK response (longer timeout for large data processing)
         if (!serial_.readExactPolling(response, 2, 10000)) {
-            std::cerr << "Error: Timeout waiting for OK response\n";
+            LOG_WARN << "Error: Timeout waiting for OK response\n";
             return false;
         }
         
         if (response[0] != 'O' || response[1] != 'K') {
-            std::cerr << "Error: Frame not acknowledged (expected OK): "
+            LOG_WARN << "Error: Frame not acknowledged (expected OK): "
                       << (int)(unsigned char)response[0] << " " 
                       << (int)(unsigned char)response[1] << "\n";
             return false;
@@ -297,7 +298,7 @@ public:
         std::chrono::duration<double, std::milli> dataDuration = dataEndTime - rdEndTime;
         std::chrono::duration<double, std::milli> okDuration = endTime - dataEndTime;
 
-        std::cout << "Frame sent successfully. Timings (ms): "
+        LOG_INFO << "Frame sent successfully. Timings (ms): "
                   << "Header: " << headerDuration.count() << ", "
                   << "RD Wait: " << rdDuration.count() << ", "
                   << "Data Send: " << dataDuration.count() << ", "

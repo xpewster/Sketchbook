@@ -5,6 +5,7 @@
 #include <filesystem>
 #include <iostream>
 #include <fstream>
+#include "log.hpp"
 
 class Settings {
 public:
@@ -59,15 +60,15 @@ public:
         
         // Create default settings file if it doesn't exist
         if (!std::filesystem::exists(settingsPath)) {
-            std::cout << "settings.toml not found, creating default...\n";
+            LOG_INFO << "settings.toml not found, creating default...\n";
             createDefaultSettings(settingsPath);
         }
 
-        std::cout << "Loading settings from: " << settingsPath << "\n";
+        LOG_INFO << "Loading settings from: " << settingsPath << "\n";
         
         try {
             auto config = toml::parse_file(settingsPath.string());
-            std::cout << "Parsed settings.toml successfully\n";
+            LOG_INFO << "Parsed settings.toml successfully\n";
 
             if (auto prefTable = config["preferences"].as_table()) {
                 preferences.selectedSkin = (*prefTable)["selected_skin"].value_or("Debug");
@@ -108,11 +109,11 @@ public:
                 train.apiBase = (*trainTable)["api_base"].value_or("");
             }
             
-            std::cout << "Settings loaded successfully from: " << settingsPath << "\n";
+            LOG_INFO << "Settings loaded successfully from: " << settingsPath << "\n";
             return true;
             
         } catch (const toml::parse_error& err) {
-            std::cerr << "Error parsing settings.toml: " << err << "\n";
+            LOG_ERROR << "Error parsing settings.toml: " << err << "\n";
             return false;
         }
     }
@@ -166,11 +167,11 @@ public:
             std::ofstream file(settingsPath);
             file << config;
             
-            std::cout << "Settings saved to: " << settingsPath << "\n";
+            LOG_INFO << "Settings saved to: " << settingsPath << "\n";
             return true;
             
         } catch (const std::exception& e) {
-            std::cerr << "Error saving settings: " << e.what() << "\n";
+            LOG_ERROR << "Error saving settings: " << e.what() << "\n";
             return false;
         }
     }

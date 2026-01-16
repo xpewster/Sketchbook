@@ -5,6 +5,7 @@
 #include <chrono>
 #include <string>
 #include <iostream>
+#include "log.hpp"
 
 using json = nlohmann::json;
 
@@ -30,7 +31,7 @@ public:
     WeatherMonitor(const std::string& apiKey, float lat, float lon, const std::string& units = "imperial")
         : apiKey_(apiKey), lat_(lat), lon_(lon), units_(units) {
         lastUpdateTime_ = std::chrono::steady_clock::now() - std::chrono::hours(1); // Force initial update
-        std::cout << "WeatherMonitor initialized with API key: " << apiKey_ 
+        LOG_INFO << "WeatherMonitor initialized with API key: " << apiKey_ 
                   << ", lat: " << lat_ << ", lon: " << lon_ 
                   << ", units: " << units_ << "\n";
     }
@@ -60,10 +61,10 @@ private:
         
         if (response.isOk()) {
             parseWeatherData(response.body);
-            std::cout << "Weather data updated successfully: [IconCode " << cachedWeather_.iconCode << "] [IsNight " << cachedWeather_.isNight << "] [Temp " << cachedWeather_.currentTemp << "] [WindSpeed " << cachedWeather_.windSpeed << "]\n";
+            LOG_DEBUG << "Weather data updated successfully: [IconCode " << cachedWeather_.iconCode << "] [IsNight " << cachedWeather_.isNight << "] [Temp " << cachedWeather_.currentTemp << "] [WindSpeed " << cachedWeather_.windSpeed << "]\n";
             cachedWeather_.available = true;
         } else {
-            std::cerr << "Weather API request failed: " << response.statusCode << "\n";
+            LOG_WARN << "Weather API request failed: " << response.statusCode << "\n";
             cachedWeather_.available = false;
         }
     }
@@ -112,7 +113,7 @@ private:
             }
             
         } catch (const json::exception& e) {
-            std::cerr << "JSON parsing error: " << e.what() << "\n";
+            LOG_ERROR << "JSON parsing error: " << e.what() << "\n";
         }
     }
 

@@ -5,6 +5,7 @@
 #include <unordered_map>
 #include <filesystem>
 
+#include "../log.hpp"
 #include "../system_stats.h"
 #include "../utils/xml.h"
 #include "../weather.hpp"
@@ -113,9 +114,9 @@ protected:
                     fc.loaded = true;
                     // Disable anti-aliasing to prevent magenta glow in flash mode
                     fc.font.setSmooth(false);
-                    std::cout << "Loaded font " << i << ": " << fc.ttfFile << "\n";
+                    LOG_INFO << "Loaded font " << i << ": " << fc.ttfFile << "\n";
                 } else {
-                    std::cerr << "Failed to load font: " << fullPath << "\n";
+                    LOG_WARN << "Failed to load font: " << fullPath << "\n";
                 }
                 
                 fontConfigs.push_back(std::move(fc));
@@ -183,17 +184,17 @@ public:
         
         if (!xmlFilePath.empty()) {
             baseSkinDir = std::filesystem::path(xmlFilePath).parent_path().string();
-            std::cout << "Loading skin from: " << baseSkinDir << "\n";
+            LOG_INFO << "Loading skin from: " << baseSkinDir << "\n";
             if (parseXMLFile(xmlFilePath, parameters) != 0) {
-                std::cerr << "Failed to parse XML file: " << xmlFilePath << "\n";
+                LOG_WARN << "Failed to parse XML file: " << xmlFilePath << "\n";
                 return 1;
             }
         }
 
         // Debug: print loaded parameters
-        std::cout << "Loaded skin parameters:\n";
+        LOG_INFO << "Loaded skin parameters:\n";
         for (const auto& kv : parameters) {
-            std::cout << "  " << kv.first << " = " << kv.second << "\n";
+            LOG_INFO << "  " << kv.first << " = " << kv.second << "\n";
         }
         
         loadFonts();

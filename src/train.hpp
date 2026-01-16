@@ -6,6 +6,7 @@
 #include <string>
 #include <iostream>
 #include <algorithm>
+#include "log.hpp"
 
 
 using json = nlohmann::json;
@@ -25,7 +26,7 @@ public:
                  const std::string& stopId0, const std::string& stopId1)
         : apiBase_(apiBase), apiKey_(apiKey), stopId0_(stopId0), stopId1_(stopId1) {
         lastUpdateTime_ = std::chrono::steady_clock::now() - std::chrono::hours(1); // Force initial update
-        std::cout << "TrainMonitor initialized with API base: " << apiBase_
+        LOG_INFO << "TrainMonitor initialized with API base: " << apiBase_
                   << ", stopId0: " << stopId0_ << ", stopId1: " << stopId1_ << "\n";
     }
     
@@ -54,18 +55,18 @@ private:
         HttpResponse response = get(apiBase_ + path);
         
         if (response.isOk()) {
-            std::cout << "Train API response [" << response.statusCode << "] received for stop " << stopIndex << ": " << response.body.substr(0, 50) << "...\n";
+            // LOG_DEBUG << "Train API response [" << response.statusCode << "] received for stop " << stopIndex << ": " << response.body.substr(0, 50) << "...\n";
             parseTrainData(response.body, stopIndex);
-            std::cout << "Train data updated for stop " << stopIndex 
-                      << ": [Headsign " << (stopIndex == 0 ? cachedTrain_.headsign0 : cachedTrain_.headsign1)
-                      << "] [Minutes " << (stopIndex == 0 ? cachedTrain_.minsToNextTrain0 : cachedTrain_.minsToNextTrain1) << "]\n";
+            // LOG_DEBUG << "Train data updated for stop " << stopIndex 
+            //           << ": [Headsign " << (stopIndex == 0 ? cachedTrain_.headsign0 : cachedTrain_.headsign1)
+            //           << "] [Minutes " << (stopIndex == 0 ? cachedTrain_.minsToNextTrain0 : cachedTrain_.minsToNextTrain1) << "]\n";
             if (stopIndex == 0) {
                 cachedTrain_.available0 = true;
             } else {
                 cachedTrain_.available1 = true;
             }
         } else {
-            std::cerr << "Train API request failed for stop " << stopIndex 
+            LOG_WARN << "Train API request failed for stop " << stopIndex 
                       << ": " << response.statusCode << "\n";
             if (stopIndex == 0) {
                 cachedTrain_.available0 = false;
@@ -88,7 +89,7 @@ private:
             // Navigate to arrivals array
             if (!data.contains("data") || !data["data"].contains("entry") || 
                 !data["data"]["entry"].contains("arrivalsAndDepartures")) {
-                std::cerr << "Unexpected JSON structure for stop " << stopIndex << "\n";
+                LOG_WARN << "Unexpected JSON structure for stop " << stopIndex << "\n";
                 return;
             }
             
@@ -138,7 +139,7 @@ private:
             }
             
         } catch (const json::exception& e) {
-            std::cerr << "JSON parsing error for stop " << stopIndex << ": " << e.what() << "\n";
+            LOG_ERROR << "JSON parsing error for stop " << stopIndex << ": " << e.what() << "\n";
         }
     }
 

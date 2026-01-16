@@ -33,7 +33,7 @@ void parseXMLNode(XMLElement* element, const std::string& path,
 int parseXMLFile(const std::string& filePath, std::unordered_map<std::string, std::string>& params) {
     tinyxml2::XMLDocument doc;
     if (doc.LoadFile(filePath.c_str()) != XML_SUCCESS) {
-        std::cerr << "Failed to load XML file: " << filePath << "\n";
+        LOG_WARN << "Failed to load XML file: " << filePath << "\n";
         return 1;
     }
 

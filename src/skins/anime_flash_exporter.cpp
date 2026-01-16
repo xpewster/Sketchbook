@@ -3,6 +3,7 @@
 #include "flash_exporter.hpp"
 #include "skins/skin.h"
 #include "image.hpp"
+#include "log.hpp"
 
 #include <SFML/Graphics.hpp>
 #include <unordered_map>
@@ -55,7 +56,7 @@ public:
         if (!createEnabledMarker(result)) return result;
         
         result.success = true;
-        std::cout << "Flash export complete: " << result.exportedFiles.size() 
+        LOG_INFO << "Flash export complete: " << result.exportedFiles.size() 
                   << " files, " << result.totalBytes << " bytes\n";
         
         return result;
@@ -299,12 +300,12 @@ private:
             if (animated && frameCount > 1) {
                 std::string outPath = assetDir_ + outBasenames[i] + ".gif";
                 if (!exportAnimationToGif(basePath, frameCount, fps, outPath, result)) {
-                    std::cout << "Warning: Could not export animated " << iconKeys[i] << "\n";
+                    LOG_WARN << "Warning: could not export animated " << iconKeys[i] << "\n";
                 }
             } else {
                 std::string outPath = assetDir_ + outBasenames[i] + ".r565";
                 if (!exportImageToRGB565(basePath, outPath, result)) {
-                    std::cout << "Warning: Could not export " << iconKeys[i] << "\n";
+                    LOG_WARN << "Warning: could not export " << iconKeys[i] << "\n";
                 }
             }
         }
@@ -326,13 +327,13 @@ private:
                                                std::filesystem::copy_options::overwrite_existing);
                     result.exportedFiles.push_back(fc.pcfFile);
                     result.totalBytes += std::filesystem::file_size(outPath);
-                    std::cout << "Copied font: " << fc.pcfFile << "\n";
+                    LOG_INFO << "Copied font: " << fc.pcfFile << "\n";
                 } catch (const std::exception& e) {
-                    std::cout << "Warning: Could not copy font " << fc.pcfFile << ": " << e.what() << "\n";
+                    LOG_WARN << "Warning: Could not copy font " << fc.pcfFile << ": " << e.what() << "\n";
                 }
             } else {
-                std::cout << "Warning: PCF font not found: " << pcfPath << "\n";
-                std::cout << "  (You may need to convert " << fc.ttfFile << " to PCF format)\n";
+                LOG_WARN << "Warning: PCF font not found: " << pcfPath << "\n";
+                LOG_WARN << "  (You may need to convert " << fc.ttfFile << " to PCF format)\n";
             }
         }
         
@@ -373,7 +374,7 @@ private:
             std::string framePath = pathNoExt + "." + std::to_string(i) + ".png";
             sf::Image srcFrame;
             if (!srcFrame.loadFromFile(framePath)) {
-                std::cout << "Warning: Missing frame " << framePath << "\n";
+                LOG_WARN << "Warning: Missing frame " << framePath << "\n";
                 continue;
             }
             
@@ -398,7 +399,7 @@ private:
         
         result.exportedFiles.push_back(std::filesystem::path(outPath).filename().string());
         result.totalBytes += std::filesystem::file_size(outPath);
-        std::cout << "Created GIF: " << outPath << " (" << frameCount << " frames)\n";
+        LOG_INFO << "Created GIF: " << outPath << " (" << frameCount << " frames)\n";
         
         return true;
     }
@@ -454,7 +455,7 @@ private:
         
         result.exportedFiles.push_back(std::filesystem::path(outPath).filename().string());
         result.totalBytes += std::filesystem::file_size(outPath);
-        std::cout << "Created RGB565: " << outPath << " (" << width << "x" << height << ")\n";
+        LOG_INFO << "Created RGB565: " << outPath << " (" << width << "x" << height << ")\n";
         
         return true;
     }
@@ -467,16 +468,16 @@ private:
         std::string configPath = assetDir_ + "config.txt";
         std::ofstream cfg(configPath);
         if (!cfg) {
-            result.error = "Failed to create config file";
+            result.error = "Failed to create config file: " + configPath;
             return false;
         }
         
         // Original skin dimensions (before rotation)
-        const int origW = 240;
-        const int origH = 960;
+        const int origW = 960;
+        const int origH = 240;
         // After rotation, dimensions are swapped
-        const int dispW = origH;  // 960
-        const int dispH = origW;  // 240
+        const int dispW = origH;
+        const int dispH = origW;
         
         // Header
         cfg << "# Flash mode configuration\n";
@@ -640,7 +641,7 @@ private:
         
         result.exportedFiles.push_back("config.txt");
         result.totalBytes += std::filesystem::file_size(configPath);
-        std::cout << "Created config: " << configPath << "\n";
+        LOG_INFO << "Created config: " << configPath << "\n";
         
         return true;
     }

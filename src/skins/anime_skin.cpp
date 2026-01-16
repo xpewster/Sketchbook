@@ -251,6 +251,7 @@ private:
         if (it != parameters.end()) {
             return it->second;
         }
+        LOG_WARN << "Key not found: " << key << "\n";
         return defaultVal;
     }
 
@@ -267,6 +268,7 @@ private:
                 return defaultVal;
             }
         }
+        LOG_WARN << "Float key not found or invalid: " << key << "\n";
         return defaultVal;
     }
 
@@ -279,6 +281,7 @@ private:
                 return defaultVal;
             }
         }
+        LOG_WARN << "Int key not found or invalid: " << key << "\n";
         return defaultVal;
     }
 
@@ -287,6 +290,7 @@ private:
         if (it != parameters.end()) {
             return it->second == "true" || it->second == "1" || it->second == "True";
         }
+        LOG_WARN << "Boolean key not found: " << key << "\n";
         return defaultVal;
     }
 
@@ -301,11 +305,11 @@ private:
                 unsigned int hex = std::stoul(hexStr, nullptr, 16);
                 return sf::Color((hex >> 16) & 0xFF, (hex >> 8) & 0xFF, hex & 0xFF);
             } catch (...) {
-                std::cout << "Invalid color for key " << key << ": " << it->second << "\n";
+                LOG_WARN << "Invalid color for key " << key << ": " << it->second << "\n";
                 return defaultVal;
             }
         }
-        std::cout << "Color key not found: " << key << "\n";
+        LOG_WARN << "Color key not found: " << key << "\n";
         return defaultVal;
     }
 
@@ -455,7 +459,7 @@ private:
         if (initialized && !parametersRefreshed) return;
         initialized = true;
         if (parametersRefreshed) {
-            std::cout << "Refreshing skin parameters...\n";
+            LOG_INFO << "Refreshing skin parameters...\n";
             backgroundFrames.clear();
             characterFrames.clear();
             characterWarmFrames.clear();

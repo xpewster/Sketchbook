@@ -4,6 +4,7 @@
 #include <string>
 #include <vector>
 #include <iostream>
+#include "log.hpp"
 
 #pragma comment(lib, "winhttp.lib")
 
@@ -30,7 +31,7 @@ HttpResponse get(const std::string& url) {
     urlComp.dwUrlPathLength = sizeof(path) / sizeof(wchar_t);
     
     if (!WinHttpCrackUrl(wUrl.c_str(), 0, 0, &urlComp)) {
-        std::cerr << "Failed to parse URL: " << url << "\n";
+        LOG_WARN << "Failed to parse URL: " << url << "\n";
         return response;
     }
     
@@ -44,7 +45,7 @@ HttpResponse get(const std::string& url) {
     );
     
     if (!hSession) {
-        std::cerr << "WinHttpOpen failed\n";
+        LOG_WARN << "WinHttpOpen failed\n";
         return response;
     }
     
@@ -55,7 +56,7 @@ HttpResponse get(const std::string& url) {
     
     HINTERNET hConnect = WinHttpConnect(hSession, host, port, 0);
     if (!hConnect) {
-        std::cerr << "WinHttpConnect failed\n";
+        LOG_WARN << "WinHttpConnect failed\n";
         WinHttpCloseHandle(hSession);
         return response;
     }
@@ -76,7 +77,7 @@ HttpResponse get(const std::string& url) {
     );
     
     if (!hRequest) {
-        std::cerr << "WinHttpOpenRequest failed\n";
+        LOG_WARN << "WinHttpOpenRequest failed\n";
         WinHttpCloseHandle(hConnect);
         WinHttpCloseHandle(hSession);
         return response;
@@ -85,7 +86,7 @@ HttpResponse get(const std::string& url) {
     // Send request
     if (!WinHttpSendRequest(hRequest, WINHTTP_NO_ADDITIONAL_HEADERS, 0,
                             WINHTTP_NO_REQUEST_DATA, 0, 0, 0)) {
-        std::cerr << "WinHttpSendRequest failed\n";
+        LOG_WARN << "WinHttpSendRequest failed\n";
         WinHttpCloseHandle(hRequest);
         WinHttpCloseHandle(hConnect);
         WinHttpCloseHandle(hSession);
@@ -94,7 +95,7 @@ HttpResponse get(const std::string& url) {
     
     // Receive response
     if (!WinHttpReceiveResponse(hRequest, NULL)) {
-        std::cerr << "WinHttpReceiveResponse failed\n";
+        LOG_WARN << "WinHttpReceiveResponse failed\n";
         WinHttpCloseHandle(hRequest);
         WinHttpCloseHandle(hConnect);
         WinHttpCloseHandle(hSession);

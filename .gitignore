@@ -8,3 +8,4 @@ _deps/
 *.obj
 out
 settings.toml
+test/

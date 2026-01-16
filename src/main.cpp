@@ -3,9 +3,11 @@
 #include <winsock2.h>
 #include <locale.h>
 
+#include "log.hpp"
 #include "system_stats.h"
 #include "image.hpp"
 #include "dirty_rects.hpp"
+#include "tcp.hpp"
 
 #include <SFML/Graphics.hpp>
 #include <Shlobj.h>
@@ -38,122 +40,6 @@
 const sf::Color FLASH_TRANSPARENT_COLOR(248, 0, 248);
 constexpr uint16_t FLASH_TRANSPARENT_RGB565 = 0xF81F;
 
-// Connection state for async connection
-enum class ConnectionState {
-    Disconnected,
-    Connecting,
-    Connected
-};
-
-class TcpConnection {
-public:
-    TcpConnection() : sock_(INVALID_SOCKET) {
-        WSADATA wsaData;
-        WSAStartup(MAKEWORD(2, 2), &wsaData);
-    }
-    
-    ~TcpConnection() {
-        disconnect();
-        WSACleanup();
-    }
-    
-    bool connect(const std::string& host, const int tcp_port) {
-        disconnect();
-        
-        sock_ = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-        if (sock_ == INVALID_SOCKET) return false;
-        
-        // Disable Nagle for lower latency
-        int flag = 1;
-        setsockopt(sock_, IPPROTO_TCP, TCP_NODELAY, (char*)&flag, sizeof(flag));
-        
-        // Send buffer
-        int bufSize = 256 * 1024;
-        setsockopt(sock_, SOL_SOCKET, SO_SNDBUF, (char*)&bufSize, sizeof(bufSize));
-        
-        sockaddr_in serverAddr = {};
-        serverAddr.sin_family = AF_INET;
-        serverAddr.sin_port = htons(tcp_port);
-        
-        if (inet_pton(AF_INET, host.c_str(), &serverAddr.sin_addr) != 1) {
-            closesocket(sock_);
-            sock_ = INVALID_SOCKET;
-            return false;
-        }
-        
-        if (::connect(sock_, (sockaddr*)&serverAddr, sizeof(serverAddr)) == SOCKET_ERROR) {
-            closesocket(sock_);
-            sock_ = INVALID_SOCKET;
-            return false;
-        }
-        
-        return true;
-    }
-    
-    void disconnect() {
-        if (sock_ != INVALID_SOCKET) {
-            closesocket(sock_);
-            sock_ = INVALID_SOCKET;
-        }
-    }
-    
-    bool isConnected() const { return sock_ != INVALID_SOCKET; }
-    
-    // Send arbitrary byte buffer
-    bool sendPacket(const uint8_t* data, size_t size) {
-        if (!isConnected()) return false;
-        
-        const char* ptr = reinterpret_cast<const char*>(data);
-        int remaining = static_cast<int>(size);
-        
-        while (remaining > 0) {
-            int sent = send(sock_, ptr, remaining, 0);
-            if (sent == SOCKET_ERROR) {
-                disconnect();
-                return false;
-            }
-            ptr += sent;
-            remaining -= sent;
-        }
-        return true;
-    }
-    
-    bool sendFrame(const uint16_t* data, size_t pixelCount) {
-        return sendPacket(reinterpret_cast<const uint8_t*>(data), pixelCount * 2);
-    }
-    
-    // Wait for ACK byte from remote (with timeout)
-    // Returns true if ACK received, false on timeout or error
-    bool waitForAck(int timeoutMs = 5000) {
-        if (!isConnected()) return false;
-        
-        // Set receive timeout
-        DWORD timeout = timeoutMs;
-        setsockopt(sock_, SOL_SOCKET, SO_RCVTIMEO, (char*)&timeout, sizeof(timeout));
-        
-        char ack;
-        int result = recv(sock_, &ack, 1, 0);
-        
-        if (result == 1) {
-            return true;  // ACK received
-        } else if (result == 0) {
-            // Connection closed
-            disconnect();
-            return false;
-        } else {
-            // Error or timeout
-            int err = WSAGetLastError();
-            if (err == WSAETIMEDOUT) {
-                return false;  // Timeout - don't disconnect
-            }
-            disconnect();
-            return false;
-        }
-    }
-    
-private:
-    SOCKET sock_;
-};
 
 // Threaded frame sender with frame lock support
 class FrameSender {
@@ -591,25 +477,25 @@ flash::FlashStatsMessage buildFlashStats(const SystemStats& stats, const Weather
 
 int main() {
     if (!IsUserAnAdmin()) {
-        std::cout << "This application must be run as administrator.\n";
+        LOG_ERROR << "This application must be run as administrator.\n";
         return 1;
     }
     setlocale(LC_ALL, "");
 
-    std::cout << "Starting Sketchbook...\n";
+    LOG_INFO << "Starting Sketchbook...\n";
 
     Settings settings;
     if (!settings.load()) {
-        std::cerr << "Failed to load settings.toml\n";
+        LOG_ERROR << "Failed to load settings.toml\n";
         return 1;
     }
 
     if (settings.weather.apiKey == "YOUR_API_KEY_HERE" || settings.weather.apiKey.empty()) {
-        std::cerr << "Please set your OpenWeatherMap API key in settings.toml\n";
+        LOG_WARN << "Please set your OpenWeatherMap API key in settings.toml\n";
         return 1;
     }
 
-    std::cout << "Successfully loaded settings.\n";
+    LOG_INFO << "Successfully loaded settings.\n";
 
     const int menuHeight = 40;
     const int previewScale = 1;
@@ -624,13 +510,13 @@ int main() {
     // Load font
     sf::Font font;
     if (!font.openFromFile("C:/Windows/Fonts/times.ttf")) {
-        std::cerr << "Failed to load font\n";
+        LOG_ERROR << "Failed to load default font\n";
         return 1;
     }
 
     std::unordered_map<std::string, Skin*> skins;
     std::string skinName = settings.preferences.selectedSkin;
-    std::cout << "Selected skin: " << skinName << "\n";
+    LOG_INFO << "Selected skin: " << skinName << "\n";
     DebugSkin debugSkin = DebugSkin(std::string("Debug"), qualia::DISPLAY_HEIGHT, qualia::DISPLAY_WIDTH);
     debugSkin.initialize("");
     skins["Debug"] = &debugSkin;
@@ -688,7 +574,7 @@ int main() {
     refreshBtn.setColor(sf::Color(252, 186, 3), sf::Color(252, 205, 76));
     refreshBtn.setIcon("resources/Refresh.png", 0, 0, 24, 24);
     Checkbox frameLockCB(400, 8, 12, "Frame lock", font, 4, -2, settings.preferences.frameLock);
-    InfoIcon frameLockInfo(485, 8, 15, "resources/Info.png", "When enabled, the sender thread will wait for the remote device to finish processing each frame before progressing the animation. This prevents frame drops and tearing at the expense of slower animation.", font);
+    InfoIcon frameLockInfo(485, 8, 15, "resources/Info.png", "When enabled, the sender thread will wait for the remote device to finish processing each frame before progressing the animation. This prevents frame drops at the expense of slower animation.", font);
     Checkbox flashModeCB(400, 24, 12, "Flash mode", font, 4, -2, settings.preferences.flashMode);
     InfoIcon flashModeInfo(485, 22, 15, "resources/Info.png", "When enabled, the program will only send raw data and selected image streaming to the remote device. The rest of the image will have to be flashed to the remote device along with any relevant config and developed there.", font);
     Checkbox dirtyRectCB((float)(windowWidth - 150), (float)(windowHeight - 22), 12, "Show dirty rects", font, 4, -2, settings.preferences.showDirtyRects);

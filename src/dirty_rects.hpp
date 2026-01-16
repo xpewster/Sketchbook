@@ -5,6 +5,7 @@
 #include <cstring>
 #include <algorithm>
 #include <cstdint>
+#include "log.hpp"
 
 namespace qualia {
 
@@ -55,9 +56,9 @@ public:
 
     // Debug: print rectangles
     void debugPrintRects(const std::vector<DirtyRect>& rects) const {
-        std::cout << "Dirty Rectangles (" << rects.size() << "):\n";
+        LOG_DEBUG << "Dirty Rectangles (" << rects.size() << "):\n";
         for (const auto& r : rects) {
-            std::cout << "  x=" << r.x << " y=" << r.y << " w=" << r.w << " h=" << r.h 
+            LOG_DEBUG << "  x=" << r.x << " y=" << r.y << " w=" << r.w << " h=" << r.h 
                       << " pixels=" << r.pixelCount() << "\n";
         }
     }
