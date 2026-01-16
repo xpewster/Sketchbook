@@ -39,6 +39,7 @@ public:
         bool frameLock = true;
         bool flashMode = false;
         bool frameLockRealTimePreview = false;
+        bool closeToTray = true;
     };
 
     struct TrainConfig {
@@ -77,6 +78,7 @@ public:
                 preferences.frameLock = (*prefTable)["frame_lock"].value_or(true);
                 preferences.flashMode = (*prefTable)["flash_mode"].value_or(false);
                 preferences.frameLockRealTimePreview = (*prefTable)["frame_lock_real_time_preview"].value_or(false);
+                preferences.closeToTray = (*prefTable)["close_to_tray"].value_or(true);
             }
             
             // Parse weather settings
@@ -154,7 +156,8 @@ public:
                 {"show_dirty_rects", preferences.showDirtyRects},
                 {"frame_lock", preferences.frameLock},
                 {"flash_mode", preferences.flashMode},
-                {"frame_lock_real_time_preview", preferences.frameLockRealTimePreview}
+                {"frame_lock_real_time_preview", preferences.frameLockRealTimePreview},
+                {"close_to_tray", preferences.closeToTray}
             });
 
             config.insert_or_assign("train", toml::table{
@@ -208,7 +211,8 @@ private:
         config.insert_or_assign("preferences", toml::table{
             {"selected_skin", "Debug"},
             {"rotate_180", false},
-            {"show_dirty_rects", true}
+            {"show_dirty_rects", true},
+            {"close_to_tray", true}
         });
 
         config.insert_or_assign("train", toml::table{

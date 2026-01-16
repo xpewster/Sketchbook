@@ -183,8 +183,8 @@ public:
         fontConfigs.clear();
         
         if (!xmlFilePath.empty()) {
-            baseSkinDir = std::filesystem::path(xmlFilePath).parent_path().string();
             LOG_INFO << "Loading skin from: " << baseSkinDir << "\n";
+            baseSkinDir = std::filesystem::path(xmlFilePath).parent_path().string();
             if (parseXMLFile(xmlFilePath, parameters) != 0) {
                 LOG_WARN << "Failed to parse XML file: " << xmlFilePath << "\n";
                 return 1;

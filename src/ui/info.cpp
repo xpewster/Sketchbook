@@ -6,6 +6,13 @@
 #include "button.cpp"
 #include "text_box.cpp"
 
+enum class InfoBoxDirection {
+    Up, // Not yet supported
+    Down,
+    Left,
+    Right // Not yet supported
+};
+
 class InfoIcon {
 public:
     sf::Texture iconTex;
@@ -20,6 +27,7 @@ public:
     
     // Info box properties
     sf::RectangleShape infoBox;
+    InfoBoxDirection boxDirection;
     sf::Text infoTextDisplay;
     sf::ConvexShape tail;
     sf::RectangleShape tailCover; // To cover tail overlap with box outline
@@ -29,9 +37,9 @@ public:
     bool hoverOverBoxCounts = false; // Whether hovering over the info box itself should keep it open
     
     InfoIcon(float x, float y, float size, const std::string& iconPath, 
-             const std::string& info, sf::Font& f)
+             const std::string& info, sf::Font& f, InfoBoxDirection direction = InfoBoxDirection::Down)
         : position(x, y), iconSize(size), infoText(info), font(f),
-          infoTextDisplay(f, info, 12) {
+          infoTextDisplay(f, info, 12), boxDirection(direction) {
         
         // Load icon
         if (iconTex.loadFromFile(iconPath)) {
@@ -97,8 +105,16 @@ public:
         
         if (hovered) {
             // Position info box below icon
-            float boxX = position.x + iconSize / 2 - boxWidth / 2;
-            float boxY = position.y + iconSize + 10; // 10px gap + tail height
+            float boxX = 0.0f;
+            float boxY = 0.0f;
+
+            if (boxDirection == InfoBoxDirection::Down) {
+                boxX = position.x + iconSize / 2 - boxWidth / 2;
+                boxY = position.y + iconSize + 10; // 10px gap + tail height
+            } else if (boxDirection == InfoBoxDirection::Left) {
+                boxX = position.x + iconSize / 2 + 30 - boxWidth; // 30px margin
+                boxY = position.y + iconSize + 10;
+            }
             
             sf::FloatRect textBounds = infoTextDisplay.getLocalBounds();
             float boxHeight = textBounds.size.y + boxPadding * 2;

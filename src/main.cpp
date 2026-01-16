@@ -8,6 +8,7 @@
 #include "image.hpp"
 #include "dirty_rects.hpp"
 #include "tcp.hpp"
+#include "tray.hpp"
 
 #include <SFML/Graphics.hpp>
 #include <Shlobj.h>
@@ -39,6 +40,7 @@
 // Transparent color key for flash mode (magenta = 0xF81F)
 const sf::Color FLASH_TRANSPARENT_COLOR(248, 0, 248);
 constexpr uint16_t FLASH_TRANSPARENT_RGB565 = 0xF81F;
+
 
 
 // Threaded frame sender with frame lock support
@@ -475,7 +477,9 @@ flash::FlashStatsMessage buildFlashStats(const SystemStats& stats, const Weather
     return msg;
 }
 
-int main() {
+int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
+    PSTR lpCmdLine, int nCmdShow)
+{
     if (!IsUserAnAdmin()) {
         LOG_ERROR << "This application must be run as administrator.\n";
         return 1;
@@ -505,6 +509,10 @@ int main() {
     const int windowHeight = menuHeight + previewHeight + 50;
     
     sf::RenderWindow window(sf::VideoMode(sf::Vector2u(windowWidth, windowHeight)), "Sketchbook", sf::Style::Titlebar | sf::Style::Close);
+    
+    // Initialize tray manager (runs in its own thread)
+    HWND hwnd = window.getNativeHandle();
+    TrayManager trayManager(hwnd);
     window.setFramerateLimit(30);
     
     // Load font
@@ -515,14 +523,45 @@ int main() {
     }
 
     std::unordered_map<std::string, Skin*> skins;
+    std::vector<std::unique_ptr<AnimeSkin>> animeSkins; // Storage
+
     std::string skinName = settings.preferences.selectedSkin;
     LOG_INFO << "Selected skin: " << skinName << "\n";
+
     DebugSkin debugSkin = DebugSkin(std::string("Debug"), qualia::DISPLAY_HEIGHT, qualia::DISPLAY_WIDTH);
     debugSkin.initialize("");
     skins["Debug"] = &debugSkin;
-    AnimeSkin animeSkin = AnimeSkin(std::string("Sketchbook"), qualia::DISPLAY_HEIGHT, qualia::DISPLAY_WIDTH);
-    animeSkin.initialize("skins/sketchbook/skin.xml");
-    skins["Sketchbook"] = &animeSkin;
+
+    // Dynamically load skins from skins/ folder
+    namespace fs = std::filesystem;
+    std::string skinsPath = "skins/";
+
+    if (fs::exists(skinsPath) && fs::is_directory(skinsPath)) {
+        for (const auto& entry : fs::directory_iterator(skinsPath)) {
+            if (entry.is_directory()) {
+                std::string folderName = entry.path().filename().string();
+                std::string skinXmlPath = entry.path().string() + "/skin.xml";
+                
+                if (fs::exists(skinXmlPath)) {
+                    auto skin = std::make_unique<AnimeSkin>(folderName, qualia::DISPLAY_HEIGHT, qualia::DISPLAY_WIDTH);
+                    skins[folderName] = skin.get();
+                    animeSkins.push_back(std::move(skin));
+                    LOG_INFO << "Loaded skin: " << folderName << "\n";
+                } else {
+                    LOG_WARN << "Skipping folder '" << folderName << "' - no skin.xml found\n";
+                }
+            }
+        }
+    } else {
+        LOG_WARN << "Skins directory not found: " << skinsPath << "\n";
+    }
+
+    // Check if drive is already flash enabled
+    flash::AnimeSkinFlashExporter flashChecker(settings.network.espDrive);
+    if (flashChecker.isFlashable() && flashChecker.isFlashEnabled()) {
+        LOG_INFO << "Flash enabled for drive " << settings.network.espDrive << "\n";
+        settings.preferences.flashMode = true;
+    }
     
     // Create render texture at Qualia's native resolution
     sf::RenderTexture qualiaTexture(sf::Vector2u(qualia::DISPLAY_HEIGHT, qualia::DISPLAY_WIDTH)); // Swapped dimensions for 90 degree rotation
@@ -565,6 +604,7 @@ int main() {
     for (size_t i = 0; i < skinOptions.size(); ++i) {
         if (skinOptions[i] == skinName) {
             defaultSkinIndex = static_cast<int>(i);
+            skins[skinName]->initialize(skinsPath + skinName + "/skin.xml"); // Initialize the selected skin
             break;
         }
     }
@@ -591,6 +631,12 @@ int main() {
     float previewCompositeCBX1 = (float)(windowWidth - 280);
     Checkbox previewCompositeCB(previewCompositeCBX0, (float)(windowHeight - 22), 12, "Preview composite", font, 4, -2, true);
     previewCompositeCB.setLabelColor(sf::Color::White);
+    InfoIcon settingsInfo((float)(windowWidth - 50), 10, 15, "resources/Settings.png", "Settings", font, InfoBoxDirection::Left);
+    settingsInfo.setExtraHeight(60);
+    settingsInfo.enableHoverOverBox(true);
+    bool startupSettingChecked = false;
+    Checkbox startupSettingCB((float)(windowWidth - 200), 64, 12, "Start with Windows", font, 4, -2, startupSettingChecked);
+    Checkbox closeToTraySettingCB((float)(windowWidth - 200), 84, 12, "Close to tray", font, 4, -2, settings.preferences.closeToTray);
     
     // Status indicator
     sf::CircleShape statusIndicator(8);
@@ -614,7 +660,7 @@ int main() {
     
     // Menu bar background
     sf::RectangleShape menuBar(sf::Vector2f((float)windowWidth, (float)menuHeight));
-    menuBar.setFillColor(sf::Color(180, 180, 180));
+    menuBar.setFillColor(sf::Color(214, 207, 182));
     
     // Status text
     sf::Text statusText(font, statusMsg, 14);
@@ -638,15 +684,34 @@ int main() {
     std::atomic<bool> connectFinished{false};
     std::string connectingIP;
     sf::Clock ellipsisClock;
-    
+    sf::Clock logFlushClock;
+
     while (window.isOpen()) {
+
+        // Check if user wants to restore from tray
+        if (trayManager.ShouldRestore()) {
+            trayManager.RestoreFromTray();
+        }
+        
+        // Check if user wants to exit from tray menu
+        if (trayManager.ShouldExit()) {
+            window.close();
+        }
+
+        bool debugFlag = false;
+
         // Handle events
         bool mousePressed = false;
         sf::Vector2i mousePos = sf::Mouse::getPosition(window);
         
+        bool enabledFlashDuringEvents = false;
         while (const std::optional<sf::Event> event = window.pollEvent()) {
             if (event->is<sf::Event::Closed>()) {
-                window.close();
+                if (settings.preferences.closeToTray) {
+                    trayManager.MinimizeToTray();
+                } else {
+                    window.close();
+                }
             }
             if (const auto* buttonPressed = event->getIf<sf::Event::MouseButtonPressed>()) {
                 if (buttonPressed->button == sf::Mouse::Button::Left) {
@@ -656,7 +721,26 @@ int main() {
             ipInput.handleEvent(*event, mousePos, window);
             skinDropdown.handleEvent(*event, mousePos, window);
             skinName = skinDropdown.getSelectedValue();
-            settings.preferences.selectedSkin = skinName;
+            if (skinName != settings.preferences.selectedSkin) {
+                LOG_INFO << "Skin changed from " << settings.preferences.selectedSkin << " to: " << skinName << " (" << (skins[skinName]->initialized ? "initialized" : "not initialized") << ")\n";
+                settings.preferences.selectedSkin = skinName;
+                debugFlag = true;
+                if (!skins[skinName]->initialized) {
+                    LOG_INFO << "First time initializing skin: " << skinName << "\n";
+                    skins[skinName]->initialize(("skins/" + skinName + "/skin.xml").c_str());
+                }
+
+                // Check if new skin supports flash mode and if flash mode is already enabled. 
+                if (skins[skinName]->hasFlashConfig()) {
+                    flash::AnimeSkinFlashExporter flashChecker(settings.network.espDrive);
+                    if (flashChecker.isFlashable() && flashChecker.isFlashEnabled()) {
+                        LOG_INFO << "New skin supports flash mode and flash mode is already enabled on the drive. Enabling flash mode for new skin.\n";
+                        flashModeCB.setChecked(true);
+                        settings.preferences.flashMode = true;
+                        enabledFlashDuringEvents = true;
+                    }
+                }
+            }
             dirtyRectCB.handleEvent(*event, mousePos, window);
             settings.preferences.showDirtyRects = dirtyRectCB.isChecked();
             frameLockCB.handleEvent(*event, mousePos, window);
@@ -678,43 +762,68 @@ int main() {
                 previewCompositeCB.handleEvent(*event, mousePos, window);
                 skins[skinName]->getFlashConfig().previewComposite = previewCompositeCB.isChecked();
             }
+            settingsInfo.handleEvent(*event, mousePos, window);
+            if (settingsInfo.isHovered()) {
+                startupSettingCB.handleEvent(*event, mousePos, window);
+                closeToTraySettingCB.handleEvent(*event, mousePos, window);
+                settings.preferences.closeToTray = closeToTraySettingCB.isChecked();
+            }
         }
+
 
         ipInput.update(mousePos, window);
         skinDropdown.update(mousePos, window);
         flashDriveInput.update(mousePos, window);
 
         static bool lastFlashModeChecked = settings.preferences.flashMode;
+        if (enabledFlashDuringEvents) {
+            lastFlashModeChecked = true;
+        }
         // Disable flash mode checkbox if skin doesn't support it
         if (skins[skinName]->initialized && !skins[skinName]->hasFlashConfig()) {
             flashModeCB.setChecked(false);
             flashModeCB.setDisabled(true);
             settings.preferences.flashMode = false;
+            if (lastFlashModeChecked) {
+                lastFlashModeChecked = false;
+                LOG_INFO << "Skin does not support flash mode. Disabling flash mode.\n";
+            }
         } else {
             flashModeCB.setDisabled(false);
 
             // Handle flash mode checkbox - controls ENABLED file on device
             if (flashModeCB.isChecked() != lastFlashModeChecked) {
                 flash::AnimeSkinFlashExporter exporter(settings.network.espDrive);
-                
+
                 if (flashModeCB.isChecked()) {
                     // Trying to enable - check if flashable and enable
+                    LOG_INFO << "Attempting to enable flash mode...\n";
                     if (exporter.isFlashable()) {
                         if (exporter.enableFlashMode()) {
                             settings.preferences.flashMode = true;
+                            LOG_INFO << "Flash mode enabled successfully.\n";
                             flashExportStatus = "Flash mode enabled";
                         } else {
                             flashModeCB.setChecked(false);
+                            LOG_ERROR << "Failed to enable flash mode on device.\n";
                             flashExportStatus = "Failed to enable flash mode";
                         }
                     } else {
                         flashModeCB.setChecked(false);
+                        LOG_ERROR << "Device is not flashable. Make sure the FLASHABLE marker file is present on the drive.\n";
                         flashExportStatus = "Drive not flashable (no FLASHABLE marker)";
                     }
                 } else {
                     // Disabling flash mode
+                    LOG_INFO << "Attempting to disable flash mode...\n";
                     if (exporter.isFlashable()) {
-                        exporter.disableFlashMode();
+                        if (exporter.disableFlashMode()) {
+                            LOG_INFO << "Flash mode disabled successfully.\n";
+                        } else {
+                            LOG_ERROR << "Failed to disable flash mode on device.\n";
+                        }
+                    } else {
+                        LOG_WARN << "Device is not flashable. Make sure the FLASHABLE marker file is present on the drive.\n";
                     }
                     settings.preferences.flashMode = false;
                     flashExportStatus = "Flash mode disabled";
@@ -723,8 +832,6 @@ int main() {
                 lastFlashModeChecked = flashModeCB.isChecked();
             }
         }
-        
-        
         
         // Handle flash export button
         if (flashBtn.update(mousePos, mousePressed, window)) {
@@ -756,6 +863,7 @@ int main() {
         
         // Check for send errors from background thread
         if (connected && sender.hadError()) {
+            LOG_INFO << "Sender thread reported an error. Disconnecting...\n";
             sender.stop();
             connection.disconnect();
             connected = false;
@@ -795,6 +903,7 @@ int main() {
                 }
                 connectThread = std::thread([&connection, &connectResult, &connectFinished, ip = connectingIP, port = settings.network.espPort]() {
                     connectResult = connection.connect(ip, port);
+                    LOG_INFO << "Connection attempt to " << ip << ":" << port << (connectResult ? " succeeded" : " failed") << "\n";
                     connectFinished = true;
                 });
             } else if (connectionState == ConnectionState::Connecting) {
@@ -846,10 +955,12 @@ int main() {
         if (refreshBtn.update(mousePos, mousePressed, window)) {
             // Force refresh skin parameters
             for (auto& pair : skins) {
-                pair.second->initialize(pair.second->xmlFilePath);
+                if (pair.second->initialized) {
+                    pair.second->initialize(pair.second->xmlFilePath);
+                }
             }
         }
-        
+
         // Update frame lock controller
         frameLock.update();
         
@@ -1058,6 +1169,11 @@ int main() {
             flashDriveInput.draw(window);
             flashBtn.draw(window);
         }
+        settingsInfo.draw(window);
+        if (settingsInfo.isHovered()) {
+            startupSettingCB.draw(window);
+            closeToTraySettingCB.draw(window);
+        }
         window.draw(statusIndicator);
         window.draw(statusIndicatorBorder);  
         
@@ -1094,6 +1210,7 @@ int main() {
         sender.stop();
         connection.disconnect();
     }
+    
     
     return 0;
 }

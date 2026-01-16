@@ -6,16 +6,16 @@
     <background>
         <png>bg.png</png>
         <animation>
-            <enabled>true</enabled>
-            <speed>10</speed>
+            <enabled>false</enabled>
+            <speed>8</speed>
             <framecount>4</framecount>
         </animation>
     </background>
     <character>
         <png>char.png</png>
         <hot><png>char_hot.png</png></hot>
-        <x>234</x>
-        <y>10</y>
+        <x>230</x>
+        <y>5</y>
         <flip>false</flip>
 		<bobbing>
 			<enabled>true</enabled>
@@ -46,10 +46,10 @@
                 </animation>
             </foggy>
             <night><png>weather/night.png</png></night>
-            <width>120</width>
-            <height>120</height>
-            <x>500</x>
-            <y>110</y>
+            <width>110</width>
+            <height>110</height>
+            <x>20</x>
+            <y>115</y>
             <bobbing>
                 <enabled>false</enabled>
                 <speed>5</speed>
@@ -57,7 +57,7 @@
         </icon>
         <text>
             <fontindex>1</fontindex>
-            <x>628</x>
+            <x>138</x>
             <y>131</y>
             <color>#000000</color>
             <size>64</size>
@@ -68,30 +68,30 @@
         <cpu>
             <usage>
                 <text>
-                    <x>630</x>
-                    <y>16</y>
+                    <x>560</x>
+                    <y>66</y>
                     <color>#000000</color>
-                    <size>30</size>
+                    <size>40</size>
                 </text>
                 <icon>
                     <path>icon/cpu.png</path>
-                    <x>574</x>
-                    <y>18</y>
-                    <width>34</width>
-                    <height>34</height>
+                    <x>534</x>
+                    <y>68</y>
+                    <width>0</width>
+                    <height>0</height>
                 </icon>
             </usage>
             <temp>
                 <text>
-                    <x>630</x>
-                    <y>40</y>
+                    <x>590</x>
+                    <y>140</y>
                     <color>#000000</color>
                     <size>30</size>
                 </text>
                 <icon>
                     <path>icon/temp.png</path>
-                    <x>570</x>
-                    <y>45</y>
+                    <x>530</x>
+                    <y>145</y>
                     <width>30</width>
                     <height>24</height>
                 </icon>
@@ -101,34 +101,34 @@
         <mem>
             <usage>
                 <text>
-                    <x>630</x>
-                    <y>48</y>
+                    <x>560</x>
+                    <y>118</y>
                     <color>#000000</color>
-                    <size>30</size>
+                    <size>40</size>
                 </text>
                 <icon>
                     <path>icon/mem.png</path>
-                    <x>565</x>
-                    <y>48</y>
-                    <width>42</width>
-                    <height>36</height>
+                    <x>528</x>
+                    <y>118</y>
+                    <width>0</width>
+                    <height>0</height>
                 </icon>
             </usage>
         </mem>
         <train>
             <next>
 				<text>
-					<x>630</x>
-					<y>81</y>
+					<x>560</x>
+					<y>171</y>
 					<color>#000000</color>
-					<size>30</size>
+					<size>40</size>
 				</text>
                 <icon>
                     <path>icon/train.png</path>
-                    <x>560</x>
-                    <y>66</y>
-                    <width>50</width>
-                    <height>50</height>
+                    <x>520</x>
+                    <y>166</y>
+                    <width>0</width>
+                    <height>0</height>
                 </icon>
             </next> 
         </train>

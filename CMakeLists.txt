@@ -41,7 +41,7 @@ FetchContent_Declare(tomlplusplus
     SYSTEM)
 FetchContent_MakeAvailable(tomlplusplus)
 
-add_executable(Sketchbook src/main.cpp src/image.hpp)
+add_executable(Sketchbook WIN32 src/main.cpp src/image.hpp resources/app.rc)
 target_compile_features(Sketchbook PRIVATE cxx_std_20)
 target_include_directories(Sketchbook PRIVATE ${CMAKE_SOURCE_DIR}/include)
 target_link_libraries(Sketchbook PRIVATE 

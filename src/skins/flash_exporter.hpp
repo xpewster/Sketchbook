@@ -136,7 +136,13 @@ public:
         }
         std::string markerPath = assetDir_ + "ENABLED";
         if (std::filesystem::exists(markerPath)) {
-            return std::filesystem::remove(markerPath);
+            try {
+                std::filesystem::remove(markerPath);
+                return true;
+            } catch (const std::exception& e) {
+                LOG_ERROR << "Failed to remove ENABLED marker: " << e.what() << "\n";
+                return false;
+            }
         }
         return true;
     }
