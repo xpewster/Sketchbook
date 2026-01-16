@@ -193,4 +193,9 @@ public:
     bool ShouldExit() {
         return shouldExit.load();
     }
+
+    // Used for lazy initialization of TrayManager before we have the SFML window handle
+    void UpdateMainWindowHandle(HWND newHwnd) {
+        mainHwnd = newHwnd;
+    }
 };

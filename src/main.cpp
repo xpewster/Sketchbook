@@ -22,6 +22,7 @@
 #include <thread>
 #include <atomic>
 #include <format>
+#include <optional>
 
 #include "ui/text_box.cpp"
 #include "ui/button.cpp"
@@ -70,17 +71,20 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
         LOG_WARN << "Please set your OpenWeatherMap API key in settings.toml\n";
     }
 
-    LOG_INFO << "Successfully loaded settings.\n";
+    LOG_INFO << "Successfully loaded settings\n";
 
     // Initialize startup manager
     StartupManager startupManager(L"Sketchbook");
-    bool isStartupMinimized = startupManager.IsInStartup() && startupManager.IsStartupMinimized();
-    if (settings.preferences.startMinimized != isStartupMinimized) {
-        LOG_WARN << "Startup minimized setting mismatch. Using windows setting " << isStartupMinimized << "\n";
-        settings.preferences.startMinimized = isStartupMinimized;
+    // bool isStartupMinimized = startupManager.IsInStartup() && startupManager.IsStartupMinimized();
+    // if (settings.preferences.startMinimized != isStartupMinimized) {
+    //     LOG_WARN << "Startup minimized setting mismatch. Using windows setting " << isStartupMinimized << "\n";
+    //     settings.preferences.startMinimized = isStartupMinimized;
+    // }
+    if (startupManager.IsInStartup() && startupManager.IsStartupMinimized()) {
+        LOG_WARN << "STARTUP SHORTCUT IS SET TO START MINIMIZED. THIS WILL CAUSE UI ISSUES\n";
     }
 
-    // Initialize main window
+    // Initialize main window (lazy creation to avoid window flash on startup)
     const int menuHeight = 40;
     const int previewScale = 1;
     const int previewWidth = qualia::DISPLAY_HEIGHT / previewScale; // Use DISPLAY_HEIGHT since the preview will be rotated 90 degrees
@@ -88,18 +92,31 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
     const int windowWidth = previewWidth + 40; 
     const int windowHeight = menuHeight + previewHeight + 50;
 
-    sf::RenderWindow window(sf::VideoMode(sf::Vector2u(windowWidth, windowHeight)), "Sketchbook", sf::Style::Titlebar | sf::Style::Close);
-    window.setFramerateLimit(30);
-    HWND hwnd = window.getNativeHandle();
-    if (isStartupMinimized) {
-        LOG_INFO << "Starting minimized on startup.\n";
-        // window.setVisible(false);
-        ShowWindow(hwnd, SW_HIDE);
-    }
-
-    // Initialize tray manager (runs in its own thread)
+    std::optional<sf::RenderWindow> window;
+    HWND hwnd = nullptr;
+    
+    // Initialize tray manager
     TrayManager trayManager(hwnd);
-    LOG_INFO << "Initialized system tray manager.\n";
+    LOG_INFO << "Initialized system tray manager\n";
+    
+    // Create the window when needed
+    auto createWindow = [&]() {
+        if (!window.has_value()) {
+            LOG_INFO << "Creating main window...\n";
+            window.emplace(sf::VideoMode(sf::Vector2u(windowWidth, windowHeight)), "Sketchbook", sf::Style::Titlebar | sf::Style::Close);
+            window->setFramerateLimit(30);
+            hwnd = window->getNativeHandle();
+            trayManager.UpdateMainWindowHandle(hwnd);
+        }
+    };
+    
+    // Only create window immediately if not starting minimized
+    if (!settings.preferences.startMinimized) {
+        createWindow();
+        LOG_INFO << "Main window created\n";
+    } else {
+        LOG_INFO << "Starting minimized on startup (window creation deferred)\n";
+    }
 
     // Load font
     sf::Font font;
@@ -277,223 +294,304 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
     sf::Clock lastConnectAttemptClock;
     bool firstConnectionAttempt = true; // Allow immediate first attempt without waiting
 
-    while (window.isOpen()) {
+    auto attemptConnection = [&]() {
+        connectionState = ConnectionState::Connecting;
+        connectingIP = ipInput.value;
+        connectResult = false;
+        connectFinished = false;
+        ellipsisClock.restart();
+        connectBtn.setLabel("Cancel");
+        connectBtn.setColor(sf::Color(255, 200, 100), sf::Color(255, 220, 150));
+        statusIndicator.setFillColor(sf::Color::Yellow);
+        
+        // Launch connection thread
+        if (connectThread.joinable()) {
+            connectThread.join();
+        }
+        connectThread = std::thread([&connection, &connectResult, &connectFinished, ip = connectingIP, port = settings.network.espPort]() {
+            connectResult = connection.connect(ip, port);
+            LOG_INFO << "Connection attempt to " << ip << ":" << port << (connectResult ? " succeeded" : " failed") << "\n";
+            connectFinished = true;
+        });
+    };
 
-        // Check if user wants to restore from tray
+    bool running = true;
+    while (running) {
+
+        // Check if user wants to restore from tray - create window if needed
         if (trayManager.ShouldRestore()) {
+            if (!window.has_value()) {
+                LOG_INFO << "Restoring from tray for the first time - creating main window\n";
+                createWindow();
+                LOG_INFO << "Main window created\n";
+            }
             trayManager.RestoreFromTray();
         }
         
         // Check if user wants to exit from tray menu
         if (trayManager.ShouldExit()) {
-            window.close();
+            running = false;
+            LOG_INFO << "Exiting from system tray menu\n";
+            if (window.has_value()) {
+                LOG_INFO << "Closing main window\n";
+                window->close();
+            }
+            break;
+        }
+        
+        // Check if window was closed
+        if (window.has_value() && !window->isOpen()) {
+            LOG_INFO << "Window closed by user\n";
+            running = false;
+            break;
         }
 
         bool debugFlag = false;
 
-        // Handle events
-        bool mousePressed = false;
-        sf::Vector2i mousePos = sf::Mouse::getPosition(window);
-        
-        bool enabledFlashDuringEvents = false;
-        while (const std::optional<sf::Event> event = window.pollEvent()) {
-            if (event->is<sf::Event::Closed>()) {
-                if (settings.preferences.closeToTray) {
-                    trayManager.MinimizeToTray();
-                } else {
-                    window.close();
-                }
-            }
-            if (const auto* buttonPressed = event->getIf<sf::Event::MouseButtonPressed>()) {
-                if (buttonPressed->button == sf::Mouse::Button::Left) {
-                    mousePressed = true;
-                }
-            }
-            ipInput.handleEvent(*event, mousePos, window);
-            skinDropdown.handleEvent(*event, mousePos, window);
-            skinName = skinDropdown.getSelectedValue();
-            if (skinName != settings.preferences.selectedSkin) {
-                LOG_INFO << "Skin changed from " << settings.preferences.selectedSkin << " to: " << skinName << " (" << (skins[skinName]->initialized ? "initialized" : "not initialized") << ")\n";
-                settings.preferences.selectedSkin = skinName;
-                debugFlag = true;
-                if (!skins[skinName]->initialized) {
-                    LOG_INFO << "First time initializing skin: " << skinName << "\n";
-                    skins[skinName]->initialize(("skins/" + skinName + "/skin.xml").c_str());
-                }
+        if (window.has_value()) {
 
-                // Check if new skin supports flash mode and if flash mode is already enabled. 
-                if (skins[skinName]->hasFlashConfig()) {
-                    flash::AnimeSkinFlashExporter flashChecker(settings.network.espDrive);
-                    if (flashChecker.isFlashable() && flashChecker.isFlashEnabled()) {
-                        LOG_INFO << "New skin supports flash mode and flash mode is already enabled on the drive. Enabling flash mode for new skin.\n";
-                        flashModeCB.setChecked(true);
-                        settings.preferences.flashMode = true;
-                        enabledFlashDuringEvents = true;
-                    }
-                }
-            }
-            dirtyRectCB.handleEvent(*event, mousePos, window);
-            settings.preferences.showDirtyRects = dirtyRectCB.isChecked();
-            frameLockCB.handleEvent(*event, mousePos, window);
-            settings.preferences.frameLock = frameLockCB.isChecked();
-            flashModeCB.handleEvent(*event, mousePos, window);
-            settings.preferences.flashMode = flashModeCB.isChecked();
-            frameLockInfo.handleEvent(*event, mousePos, window);
-            flashModeInfo.handleEvent(*event, mousePos, window);
-            if (flashModeInfo.isHovered()) {
-                flashDriveInput.handleEvent(*event, mousePos, window);
-                settings.network.espDrive = flashDriveInput.value;
-            }
-            if (frameLockCB.isChecked()) {
-                realtimeCB.handleEvent(*event, mousePos, window);
-                settings.preferences.frameLockRealTimePreview = realtimeCB.isChecked();
-            }
-            if (settings.preferences.flashMode) {
-                previewCompositeCB.setPosition(frameLockCB.isChecked() ? previewCompositeCBX0 : previewCompositeCBX1, (float)(windowHeight - 22));
-                previewCompositeCB.handleEvent(*event, mousePos, window);
-                skins[skinName]->getFlashConfig().previewComposite = previewCompositeCB.isChecked();
-            }
-            settingsInfo.handleEvent(*event, mousePos, window);
-            if (settingsInfo.isHovered()) {
-                startupSettingCB.handleEvent(*event, mousePos, window);
-                startMinimizedSettingCB.handleEvent(*event, mousePos, window);
-                settings.preferences.startMinimized = startMinimizedSettingCB.isChecked();
-                if (startMinimizedSettingCB.wasJustUpdated() && startupManager.IsInStartup()) {
-                    LOG_INFO << "Startup already exists. Updating startup shortcut to " << (settings.preferences.startMinimized ? "start minimized" : "not start minimized") << ".\n";
-                    if (startupManager.UpdateStartupSettings(settings.preferences.startMinimized)) {
-                        LOG_INFO << "Updated startup shortcut successfully.\n";
+            // Handle events
+            bool mousePressed = false;
+            sf::Vector2i mousePos = sf::Mouse::getPosition(*window);
+            
+            bool enabledFlashDuringEvents = false;
+            while (const std::optional<sf::Event> event = window->pollEvent()) {
+                if (event->is<sf::Event::Closed>()) {
+                    if (settings.preferences.closeToTray) {
+                        trayManager.MinimizeToTray();
                     } else {
-                        LOG_ERROR << "Failed to update startup shortcut.\n";
+                        window->close();
                     }
                 }
-                closeToTraySettingCB.handleEvent(*event, mousePos, window);
-                settings.preferences.closeToTray = closeToTraySettingCB.isChecked();
-                autoConnectSettingCB.handleEvent(*event, mousePos, window);
-                settings.preferences.autoConnect = autoConnectSettingCB.isChecked();
-                if (startupSettingCB.wasJustUpdated()) {
-                    if (startupSettingCB.isChecked()) {
-                        if (startupManager.IsInStartup(true)) {
-                            LOG_INFO << "Already in Windows startup.\n";
-                        } else if (startupManager.AddToStartup(settings.preferences.startMinimized)) {
-                            LOG_INFO << "Added to Windows startup successfully.\n";
-                        } else {
-                            LOG_ERROR << "Failed to add to Windows startup.\n";
-                            startupSettingCB.setChecked(false);
-                        }
-                    } else {
-                        if (!startupManager.IsInStartup(true)) {
-                            LOG_INFO << "Already not in Windows startup.\n";
-                        } else if (startupManager.RemoveFromStartup()) {
-                            LOG_INFO << "Removed from Windows startup successfully.\n";
-                        } else {
-                            LOG_ERROR << "Failed to remove from Windows startup.\n";
-                            startupSettingCB.setChecked(true);
-                        }
+                if (const auto* buttonPressed = event->getIf<sf::Event::MouseButtonPressed>()) {
+                    if (buttonPressed->button == sf::Mouse::Button::Left) {
+                        mousePressed = true;
                     }
                 }
-            }
-        }
-        ipInput.update(mousePos, window);
-        skinDropdown.update(mousePos, window);
-        flashDriveInput.update(mousePos, window);
+                ipInput.handleEvent(*event, mousePos, *window);
+                skinDropdown.handleEvent(*event, mousePos, *window);
+                skinName = skinDropdown.getSelectedValue();
+                if (skinName != settings.preferences.selectedSkin) {
+                    LOG_INFO << "Skin changed from " << settings.preferences.selectedSkin << " to: " << skinName << " (" << (skins[skinName]->initialized ? "initialized" : "not initialized") << ")\n";
+                    settings.preferences.selectedSkin = skinName;
+                    debugFlag = true;
+                    if (!skins[skinName]->initialized) {
+                        LOG_INFO << "First time initializing skin: " << skinName << "\n";
+                        skins[skinName]->initialize(("skins/" + skinName + "/skin.xml").c_str());
+                    }
 
-        static bool lastFlashModeChecked = settings.preferences.flashMode;
-        if (enabledFlashDuringEvents) {
-            lastFlashModeChecked = true;
-        }
-        // Disable flash mode checkbox if skin doesn't support it
-        if (skins[skinName]->initialized && !skins[skinName]->hasFlashConfig()) {
-            flashModeCB.setChecked(false);
-            flashModeCB.setDisabled(true);
-            settings.preferences.flashMode = false;
-            if (lastFlashModeChecked) {
-                lastFlashModeChecked = false;
-                LOG_INFO << "Skin does not support flash mode. Disabling flash mode.\n";
-            }
-        } else {
-            flashModeCB.setDisabled(false);
-
-            // Handle flash mode checkbox - controls ENABLED file on device
-            if (flashModeCB.isChecked() != lastFlashModeChecked) {
-                flash::AnimeSkinFlashExporter exporter(settings.network.espDrive);
-
-                if (flashModeCB.isChecked()) {
-                    // Trying to enable - check if flashable and enable
-                    LOG_INFO << "Attempting to enable flash mode...\n";
-                    if (exporter.isFlashable()) {
-                        if (exporter.enableFlashMode()) {
+                    // Check if new skin supports flash mode and if flash mode is already enabled. 
+                    if (skins[skinName]->hasFlashConfig()) {
+                        flash::AnimeSkinFlashExporter flashChecker(settings.network.espDrive);
+                        if (flashChecker.isFlashable() && flashChecker.isFlashEnabled()) {
+                            LOG_INFO << "New skin supports flash mode and flash mode is already enabled on the drive. Enabling flash mode for new skin.\n";
+                            flashModeCB.setChecked(true);
                             settings.preferences.flashMode = true;
-                            LOG_INFO << "Flash mode enabled successfully.\n";
-                            flashExportStatus = "Flash mode enabled";
+                            enabledFlashDuringEvents = true;
+                        }
+                    }
+                }
+                dirtyRectCB.handleEvent(*event, mousePos, *window);
+                settings.preferences.showDirtyRects = dirtyRectCB.isChecked();
+                frameLockCB.handleEvent(*event, mousePos, *window);
+                settings.preferences.frameLock = frameLockCB.isChecked();
+                flashModeCB.handleEvent(*event, mousePos, *window);
+                settings.preferences.flashMode = flashModeCB.isChecked();
+                frameLockInfo.handleEvent(*event, mousePos, *window);
+                flashModeInfo.handleEvent(*event, mousePos, *window);
+                if (flashModeInfo.isHovered()) {
+                    flashDriveInput.handleEvent(*event, mousePos, *window);
+                    settings.network.espDrive = flashDriveInput.value;
+                }
+                if (frameLockCB.isChecked()) {
+                    realtimeCB.handleEvent(*event, mousePos, *window);
+                    settings.preferences.frameLockRealTimePreview = realtimeCB.isChecked();
+                }
+                if (settings.preferences.flashMode) {
+                    previewCompositeCB.setPosition(frameLockCB.isChecked() ? previewCompositeCBX0 : previewCompositeCBX1, (float)(windowHeight - 22));
+                    previewCompositeCB.handleEvent(*event, mousePos, *window);
+                    skins[skinName]->getFlashConfig().previewComposite = previewCompositeCB.isChecked();
+                }
+                settingsInfo.handleEvent(*event, mousePos, *window);
+                if (settingsInfo.isHovered()) {
+                    startupSettingCB.handleEvent(*event, mousePos, *window);
+                    startMinimizedSettingCB.handleEvent(*event, mousePos, *window);
+                    settings.preferences.startMinimized = startMinimizedSettingCB.isChecked();
+                    // if (startMinimizedSettingCB.wasJustUpdated() && startupManager.IsInStartup()) {
+                    //     LOG_INFO << "Startup already exists. Updating startup shortcut to " << (settings.preferences.startMinimized ? "start minimized" : "not start minimized") << ".\n";
+                    //     if (startupManager.UpdateStartupSettings(settings.preferences.startMinimized)) {
+                    //         LOG_INFO << "Updated startup shortcut successfully.\n";
+                    //     } else {
+                    //         LOG_ERROR << "Failed to update startup shortcut.\n";
+                    //     }
+                    // }
+                    closeToTraySettingCB.handleEvent(*event, mousePos, *window);
+                    settings.preferences.closeToTray = closeToTraySettingCB.isChecked();
+                    autoConnectSettingCB.handleEvent(*event, mousePos, *window);
+                    settings.preferences.autoConnect = autoConnectSettingCB.isChecked();
+                    if (startupSettingCB.wasJustUpdated()) {
+                        if (startupSettingCB.isChecked()) {
+                            if (startupManager.IsInStartup(true)) {
+                                LOG_INFO << "Already in Windows startup.\n";
+                            } else if (startupManager.AddToStartup(settings.preferences.startMinimized)) {
+                                LOG_INFO << "Added to Windows startup successfully.\n";
+                            } else {
+                                LOG_ERROR << "Failed to add to Windows startup.\n";
+                                startupSettingCB.setChecked(false);
+                            }
+                        } else {
+                            if (!startupManager.IsInStartup(true)) {
+                                LOG_INFO << "Already not in Windows startup.\n";
+                            } else if (startupManager.RemoveFromStartup()) {
+                                LOG_INFO << "Removed from Windows startup successfully.\n";
+                            } else {
+                                LOG_ERROR << "Failed to remove from Windows startup.\n";
+                                startupSettingCB.setChecked(true);
+                            }
+                        }
+                    }
+                }
+            }
+            ipInput.update(mousePos, *window);
+            skinDropdown.update(mousePos, *window);
+            flashDriveInput.update(mousePos, *window);
+
+            static bool lastFlashModeChecked = settings.preferences.flashMode;
+            if (enabledFlashDuringEvents) {
+                lastFlashModeChecked = true;
+            }
+            // Disable flash mode checkbox if skin doesn't support it
+            if (skins[skinName]->initialized && !skins[skinName]->hasFlashConfig()) {
+                flashModeCB.setChecked(false);
+                flashModeCB.setDisabled(true);
+                settings.preferences.flashMode = false;
+                if (lastFlashModeChecked) {
+                    lastFlashModeChecked = false;
+                    LOG_INFO << "Skin does not support flash mode. Disabling flash mode.\n";
+                }
+            } else {
+                flashModeCB.setDisabled(false);
+
+                // Handle flash mode checkbox - controls ENABLED file on device
+                if (flashModeCB.isChecked() != lastFlashModeChecked) {
+                    flash::AnimeSkinFlashExporter exporter(settings.network.espDrive);
+
+                    if (flashModeCB.isChecked()) {
+                        // Trying to enable - check if flashable and enable
+                        LOG_INFO << "Attempting to enable flash mode...\n";
+                        if (exporter.isFlashable()) {
+                            if (exporter.enableFlashMode()) {
+                                settings.preferences.flashMode = true;
+                                LOG_INFO << "Flash mode enabled successfully.\n";
+                                flashExportStatus = "Flash mode enabled";
+                            } else {
+                                flashModeCB.setChecked(false);
+                                LOG_ERROR << "Failed to enable flash mode on device.\n";
+                                flashExportStatus = "Failed to enable flash mode";
+                            }
                         } else {
                             flashModeCB.setChecked(false);
-                            LOG_ERROR << "Failed to enable flash mode on device.\n";
-                            flashExportStatus = "Failed to enable flash mode";
+                            LOG_ERROR << "Device is not flashable. Make sure the FLASHABLE marker file is present on the drive.\n";
+                            flashExportStatus = "Drive not flashable (no FLASHABLE marker)";
                         }
                     } else {
-                        flashModeCB.setChecked(false);
-                        LOG_ERROR << "Device is not flashable. Make sure the FLASHABLE marker file is present on the drive.\n";
-                        flashExportStatus = "Drive not flashable (no FLASHABLE marker)";
-                    }
-                } else {
-                    // Disabling flash mode
-                    LOG_INFO << "Attempting to disable flash mode...\n";
-                    if (exporter.isFlashable()) {
-                        if (exporter.disableFlashMode()) {
-                            LOG_INFO << "Flash mode disabled successfully.\n";
+                        // Disabling flash mode
+                        LOG_INFO << "Attempting to disable flash mode...\n";
+                        if (exporter.isFlashable()) {
+                            if (exporter.disableFlashMode()) {
+                                LOG_INFO << "Flash mode disabled successfully.\n";
+                            } else {
+                                LOG_ERROR << "Failed to disable flash mode on device.\n";
+                            }
                         } else {
-                            LOG_ERROR << "Failed to disable flash mode on device.\n";
+                            LOG_WARN << "Device is not flashable. Make sure the FLASHABLE marker file is present on the drive.\n";
                         }
-                    } else {
-                        LOG_WARN << "Device is not flashable. Make sure the FLASHABLE marker file is present on the drive.\n";
+                        settings.preferences.flashMode = false;
+                        flashExportStatus = "Flash mode disabled";
                     }
-                    settings.preferences.flashMode = false;
-                    flashExportStatus = "Flash mode disabled";
-                }
 
-                lastFlashModeChecked = flashModeCB.isChecked();
+                    lastFlashModeChecked = flashModeCB.isChecked();
+                }
             }
-        }
-        
-        // Handle flash export button
-        if (flashBtn.update(mousePos, mousePressed, window)) {
-            flash::AnimeSkinFlashExporter exporter(settings.network.espDrive);
             
-            // Check if flashable first
-            if (!exporter.isFlashable()) {
-                flashExportStatus = "Drive not flashable (no FLASHABLE marker)";
-            } else {
-                // Clear old files first
-                exporter.clearAssetDirectory();
+            // Handle flash export button
+            if (flashBtn.update(mousePos, mousePressed, *window)) {
+                flash::AnimeSkinFlashExporter exporter(settings.network.espDrive);
                 
-                // Use same rotation as frame streaming
-                flash::ExportRotation rotation = settings.preferences.rotate180 
-                    ? flash::ExportRotation::RotNeg90 
-                    : flash::ExportRotation::Rot90;
-                auto result = exporter.exportSkin(skins[skinName], rotation);
-                if (result.success) {
-                    flashExportStatus = "Flash export OK: " + std::to_string(result.exportedFiles.size()) + " files";
-                    // Also enable flash mode checkbox
-                    flashModeCB.setChecked(true);
-                    settings.preferences.flashMode = true;
-                    lastFlashModeChecked = true;
+                // Check if flashable first
+                if (!exporter.isFlashable()) {
+                    flashExportStatus = "Drive not flashable (no FLASHABLE marker)";
                 } else {
-                    flashExportStatus = "Flash export failed: " + result.error;
+                    // Clear old files first
+                    exporter.clearAssetDirectory();
+                    
+                    // Use same rotation as frame streaming
+                    flash::ExportRotation rotation = settings.preferences.rotate180 
+                        ? flash::ExportRotation::RotNeg90 
+                        : flash::ExportRotation::Rot90;
+                    auto result = exporter.exportSkin(skins[skinName], rotation);
+                    if (result.success) {
+                        flashExportStatus = "Flash export OK: " + std::to_string(result.exportedFiles.size()) + " files";
+                        // Also enable flash mode checkbox
+                        flashModeCB.setChecked(true);
+                        settings.preferences.flashMode = true;
+                        lastFlashModeChecked = true;
+                    } else {
+                        flashExportStatus = "Flash export failed: " + result.error;
+                    }
                 }
             }
-        }
 
-        if (resetBoardSettingsBtn.update(mousePos, mousePressed, window)) {
-            if (connected) {
-                LOG_INFO << "Resetting board...\n";
-                if (sender.sendReset()) {
-                    LOG_INFO << "Reset command sent successfully.\n";
-                } else {
-                    LOG_ERROR << "Failed to send reset command.\n";
-                    statusMsg = "Failed to send reset command";
+            
+            if (refreshBtn.update(mousePos, mousePressed, *window)) {
+                // Force refresh skin parameters
+                for (auto& pair : skins) {
+                    if (pair.second->initialized) {
+                        pair.second->initialize(pair.second->xmlFilePath);
+                    }
                 }
-            } else {
-                statusMsg = "Not connected - cannot reset board";
+            }
+
+            if (resetBoardSettingsBtn.update(mousePos, mousePressed, *window)) {
+                if (connected) {
+                    LOG_INFO << "Resetting board...\n";
+                    if (sender.sendReset()) {
+                        LOG_INFO << "Reset command sent successfully.\n";
+                    } else {
+                        LOG_ERROR << "Failed to send reset command.\n";
+                        statusMsg = "Failed to send reset command";
+                    }
+                } else {
+                    statusMsg = "Not connected - cannot reset board";
+                }
+            }
+            
+            // Connect button
+            if (connectBtn.update(mousePos, mousePressed, *window)) {
+                if (connected) {
+                    sender.stop();
+                    connection.disconnect();
+                    connected = false;
+                    connectionState = ConnectionState::Disconnected;
+                    statusMsg = "Disconnected";
+                    connectBtn.setLabel("Connect");
+                    connectBtn.setColor(sf::Color(100, 255, 100), sf::Color(150, 255, 150));
+                    statusIndicator.setFillColor(sf::Color::Red);
+                } else if (connectionState == ConnectionState::Disconnected) {
+                    attemptConnection();
+                    lastConnectAttemptClock.restart();
+                } else if (connectionState == ConnectionState::Connecting) {
+                    // Cancel connection attempt
+                    if (connectThread.joinable()) {
+                        connectThread.join();
+                    }
+                    connection.disconnect();
+                    connectionState = ConnectionState::Disconnected;
+                    statusMsg = "Connection cancelled";
+                    connectBtn.setLabel("Connect");
+                    connectBtn.setColor(sf::Color(100, 255, 100), sf::Color(150, 255, 150));
+                    statusIndicator.setFillColor(sf::Color::Red);
+                }
             }
         }
         
@@ -513,55 +611,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
 
         if (settings.preferences.autoConnect && connectionState == ConnectionState::Disconnected && (firstConnectionAttempt || lastConnectAttemptClock.getElapsedTime().asSeconds() > 5.0f)) {
             LOG_INFO << "AutoConnecting...\n";
-            goto Connect;
+            attemptConnection();
             firstConnectionAttempt = false;
-        }
-        
-        // Connect button
-        if (connectBtn.update(mousePos, mousePressed, window)) {
-            if (connected) {
-                sender.stop();
-                connection.disconnect();
-                connected = false;
-                connectionState = ConnectionState::Disconnected;
-                statusMsg = "Disconnected";
-                connectBtn.setLabel("Connect");
-                connectBtn.setColor(sf::Color(100, 255, 100), sf::Color(150, 255, 150));
-                statusIndicator.setFillColor(sf::Color::Red);
-            } else if (connectionState == ConnectionState::Disconnected) {
-                Connect:
-                // Start async connection
-                connectionState = ConnectionState::Connecting;
-                connectingIP = ipInput.value;
-                connectResult = false;
-                connectFinished = false;
-                ellipsisClock.restart();
-                connectBtn.setLabel("Cancel");
-                connectBtn.setColor(sf::Color(255, 200, 100), sf::Color(255, 220, 150));
-                statusIndicator.setFillColor(sf::Color::Yellow);
-                
-                // Launch connection thread
-                if (connectThread.joinable()) {
-                    connectThread.join();
-                }
-                connectThread = std::thread([&connection, &connectResult, &connectFinished, ip = connectingIP, port = settings.network.espPort]() {
-                    connectResult = connection.connect(ip, port);
-                    LOG_INFO << "Connection attempt to " << ip << ":" << port << (connectResult ? " succeeded" : " failed") << "\n";
-                    connectFinished = true;
-                });
-                lastConnectAttemptClock.restart();
-            } else if (connectionState == ConnectionState::Connecting) {
-                // Cancel connection attempt
-                if (connectThread.joinable()) {
-                    connectThread.join();
-                }
-                connection.disconnect();
-                connectionState = ConnectionState::Disconnected;
-                statusMsg = "Connection cancelled";
-                connectBtn.setLabel("Connect");
-                connectBtn.setColor(sf::Color(100, 255, 100), sf::Color(150, 255, 150));
-                statusIndicator.setFillColor(sf::Color::Red);
-            }
         }
         
         // Check async connection result
@@ -598,15 +649,6 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
 
         if (connected) {
             firstConnectionAttempt = true; // Allow immediate reconnect after a successful connection
-        }
-
-        if (refreshBtn.update(mousePos, mousePressed, window)) {
-            // Force refresh skin parameters
-            for (auto& pair : skins) {
-                if (pair.second->initialized) {
-                    pair.second->initialize(pair.second->xmlFilePath);
-                }
-            }
         }
 
         // Update frame lock controller
@@ -761,84 +803,86 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
         statusText.setString(statusMsg);
         
         // Draw window
-        window.clear(sf::Color(60, 60, 60));
-        
-        // Preview
-        window.draw(previewBorder);
-        previewSprite.setTexture(qualiaTexture.getTexture());
-        previewSprite.setOrigin(sf::Vector2f((float)previewWidth / 2, (float)previewHeight / 2));
-        previewSprite.setPosition(sf::Vector2f((float)previewX + (float)previewWidth / 2, (float)previewY + (float)previewHeight / 2 + menuHeight));
-        window.draw(previewSprite);
+        if (window.has_value()) {
+            window->clear(sf::Color(60, 60, 60));
+            
+            // Preview
+            window->draw(previewBorder);
+            previewSprite.setTexture(qualiaTexture.getTexture());
+            previewSprite.setOrigin(sf::Vector2f((float)previewWidth / 2, (float)previewHeight / 2));
+            previewSprite.setPosition(sf::Vector2f((float)previewX + (float)previewWidth / 2, (float)previewY + (float)previewHeight / 2 + menuHeight));
+            window->draw(previewSprite);
 
-        // // Draw dot at center of preview for alignment reference
-        // sf::CircleShape centerDot(3);
-        // centerDot.setFillColor(sf::Color::Red);
-        // centerDot.setPosition(sf::Vector2f((float)previewX + (float)previewHeight / 2 - 3, (float)previewY + (float)previewWidth / 2 - 3));
-        // window.draw(centerDot);
+            // // Draw dot at center of preview for alignment reference
+            // sf::CircleShape centerDot(3);
+            // centerDot.setFillColor(sf::Color::Red);
+            // centerDot.setPosition(sf::Vector2f((float)previewX + (float)previewHeight / 2 - 3, (float)previewY + (float)previewWidth / 2 - 3));
+            // window.draw(centerDot);
 
-        // Show dirty rectangles on preview
-        if (connected && settings.preferences.showDirtyRects) {
-            std::vector<qualia::DirtyRect> dirtyRects = sender.getLastDirtyRects();
-            for (const auto& rect : dirtyRects) {
-                // Need to unrotate
-                int x = rect.x;
-                int y = rect.y;
-                int w = rect.w;
-                int h = rect.h;
-                if (settings.preferences.rotate180) {
-                    x = qualia::DISPLAY_HEIGHT - rect.y + 1 - rect.h;
-                    y = rect.x;
-                    w = rect.h;
-                    h = rect.w;
-                } else {
-                    x = rect.y;
-                    y = qualia::DISPLAY_WIDTH - rect.x + 1 - rect.w;
-                    w = rect.h;
-                    h = rect.w;
+            // Show dirty rectangles on preview
+            if (connected && settings.preferences.showDirtyRects) {
+                std::vector<qualia::DirtyRect> dirtyRects = sender.getLastDirtyRects();
+                for (const auto& rect : dirtyRects) {
+                    // Need to unrotate
+                    int x = rect.x;
+                    int y = rect.y;
+                    int w = rect.w;
+                    int h = rect.h;
+                    if (settings.preferences.rotate180) {
+                        x = qualia::DISPLAY_HEIGHT - rect.y + 1 - rect.h;
+                        y = rect.x;
+                        w = rect.h;
+                        h = rect.w;
+                    } else {
+                        x = rect.y;
+                        y = qualia::DISPLAY_WIDTH - rect.x + 1 - rect.w;
+                        w = rect.h;
+                        h = rect.w;
+                    }
+                    sf::RectangleShape r(sf::Vector2f((float)w, (float)h));
+                    r.setPosition(sf::Vector2f((float)(previewX + x), (float)(previewY + y + menuHeight)));
+                    r.setFillColor(sf::Color(255, 0, 0, 100));
+                    window->draw(r);
                 }
-                sf::RectangleShape r(sf::Vector2f((float)w, (float)h));
-                r.setPosition(sf::Vector2f((float)(previewX + x), (float)(previewY + y + menuHeight)));
-                r.setFillColor(sf::Color(255, 0, 0, 100));
-                window.draw(r);
             }
-        }
 
-        // Menu bar
-        window.draw(menuBar);
-        ipInput.draw(window);
-        connectBtn.draw(window);
-        skinDropdown.draw(window);
-        refreshBtn.draw(window);
-        frameLockCB.draw(window);
-        flashModeCB.draw(window);
-        flashModeInfo.draw(window);
-        frameLockInfo.draw(window);
-        if (flashModeInfo.isHovered()) {
-            flashDriveInput.draw(window);
-            flashBtn.draw(window);
+            // Menu bar
+            window->draw(menuBar);
+            ipInput.draw(*window);
+            connectBtn.draw(*window);
+            skinDropdown.draw(*window);
+            refreshBtn.draw(*window);
+            frameLockCB.draw(*window);
+            flashModeCB.draw(*window);
+            flashModeInfo.draw(*window);
+            frameLockInfo.draw(*window);
+            if (flashModeInfo.isHovered()) {
+                flashDriveInput.draw(*window);
+                flashBtn.draw(*window);
+            }
+            settingsInfo.draw(*window);
+            if (settingsInfo.isHovered()) {
+                startupSettingCB.draw(*window);
+                startMinimizedSettingCB.draw(*window);
+                closeToTraySettingCB.draw(*window);
+                autoConnectSettingCB.draw(*window);
+                resetBoardSettingsBtn.draw(*window);
+            }
+            window->draw(statusIndicator);
+            window->draw(statusIndicatorBorder);  
+            
+            // Status bar
+            window->draw(statusText);
+            if (frameLockCB.isChecked()) {
+                realtimeCB.draw(*window);
+            }
+            if (settings.preferences.flashMode) {
+                previewCompositeCB.draw(*window);
+            }
+            dirtyRectCB.draw(*window);
+            
+            window->display();
         }
-        settingsInfo.draw(window);
-        if (settingsInfo.isHovered()) {
-            startupSettingCB.draw(window);
-            startMinimizedSettingCB.draw(window);
-            closeToTraySettingCB.draw(window);
-            autoConnectSettingCB.draw(window);
-            resetBoardSettingsBtn.draw(window);
-        }
-        window.draw(statusIndicator);
-        window.draw(statusIndicatorBorder);  
-        
-        // Status bar
-        window.draw(statusText);
-        if (frameLockCB.isChecked()) {
-            realtimeCB.draw(window);
-        }
-        if (settings.preferences.flashMode) {
-            previewCompositeCB.draw(window);
-        }
-        dirtyRectCB.draw(window);
-        
-        window.display();
         
         // Clear flash export status after a few seconds
         static sf::Clock flashStatusClock;
@@ -848,6 +892,11 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
             }
         } else {
             flashStatusClock.restart();
+        }
+
+        if (!window.has_value()) {
+            // Sleep briefly to avoid busy loop when window is not open. When the window is open, this is handled by the framerate limit
+            std::this_thread::sleep_for(std::chrono::milliseconds(33));
         }
     }
 
