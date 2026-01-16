@@ -311,6 +311,9 @@ class FlashModeManager:
             new_tg = self.char_warm_tilegrid or self.char_tilegrid
         else:
             new_tg = self.char_hot_tilegrid or self.char_warm_tilegrid or self.char_tilegrid
+
+        if new_tg is old_tg:
+            return
         
         # Swap in group
         if old_tg and old_tg in group:

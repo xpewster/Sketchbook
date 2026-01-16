@@ -132,6 +132,7 @@ def receive_flash_data(client, flash_mgr):
     # Read fixed header (15 bytes after msg_type)
     # weather_index(1) + flags(1) + cpu%(2) + cpuT(2) + mem%(2) + weatherT(2) + train0_mins(2) + train1_mins(2) + rect_count(1) = 15 bytes
     if not recv_exact(client, header_buffer, 15):
+        print("Failed to receive full flash frame header")
         return None
     
     weather_index = header_buffer[0]
@@ -149,6 +150,7 @@ def receive_flash_data(client, flash_mgr):
     if rect_count > 0:
         target_bytes = memoryview(flash_mgr.stream_bitmap).cast('B')
         if not receive_dirty_rects(client, rect_count, target_bytes, flash_mgr.stream_bitmap):
+            print("Failed to receive flash frame dirty rects")
             return None
     
     return {
@@ -218,6 +220,7 @@ def handle_frame_flash(client, flash_mgr, group):
     global last_dirty_dims
     
     if not recv_exact(client, header_buffer, 1):
+        print("Failed to receive flash frame header message type")
         return False
     
     msg_type = header_buffer[0]
@@ -225,6 +228,7 @@ def handle_frame_flash(client, flash_mgr, group):
     if msg_type == MSG_FLASH_DATA:
         data = receive_flash_data(client, flash_mgr)
         if data is None:
+            print("Failed to receive flash frame data")
             return False
         
         # Update character state
@@ -251,6 +255,7 @@ def handle_frame_flash(client, flash_mgr, group):
         try:
             client.send(b'\x00')
         except OSError:
+            print("Failed to send ACK for flash frame")
             return False
         
         return True
