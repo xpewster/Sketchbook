@@ -50,6 +50,12 @@ struct FontConfig {
     std::string pcfFile;   // PCF filename (same name, different extension)
     sf::Font font;
     bool loaded = false;
+    
+    // Font styling
+    sf::Color fillColor = sf::Color::White;
+    bool outlineEnabled = false;
+    float outlineThickness = 0.0f;
+    sf::Color outlineColor = sf::Color::Black;
 };
 
 // Character temperature state
@@ -86,6 +92,25 @@ protected:
         return CharacterTempState::Normal;
     }
     
+    // Helper to parse hex color from parameter
+    sf::Color parseHexColor(const std::string& key, sf::Color defaultVal = sf::Color::White) const {
+        auto it = parameters.find(key);
+        if (it != parameters.end()) {
+            std::string hexStr = it->second;
+            if (!hexStr.empty() && hexStr[0] == '#') {
+                hexStr = hexStr.substr(1);
+            }
+            try {
+                unsigned int hex = std::stoul(hexStr, nullptr, 16);
+                return sf::Color((hex >> 16) & 0xFF, (hex >> 8) & 0xFF, hex & 0xFF);
+            } catch (...) {
+                LOG_WARN << "Invalid color for key " << key << ": " << it->second << "\n";
+                return defaultVal;
+            }
+        }
+        return defaultVal;
+    }
+    
     // Load fonts from configuration
     void loadFonts() {
         fontConfigs.clear();
@@ -112,11 +137,35 @@ protected:
                 std::string fullPath = baseSkinDir + "/" + fc.ttfFile;
                 if (fc.font.openFromFile(fullPath)) {
                     fc.loaded = true;
-                    // Disable anti-aliasing to prevent magenta glow in flash mode
-                    fc.font.setSmooth(false);
+                    if ((flashConfig.enabledLayers & FlashLayer::Background) != FlashLayer::None) {
+                        // Disable anti-aliasing to prevent magenta glow in flash mode
+                        fc.font.setSmooth(false);
+                    }
                     LOG_INFO << "Loaded font " << i << ": " << fc.ttfFile << "\n";
                 } else {
                     LOG_WARN << "Failed to load font: " << fullPath << "\n";
+                }
+                
+                // Load font styling parameters
+                std::string iStr = "font[id=" + std::to_string(i) + "]";
+                
+                fc.fillColor = parseHexColor("skin.fonts." + iStr + ".color", sf::Color::White);
+                
+                auto outlineEnabledIt = parameters.find("skin.fonts." + iStr + ".outline.enabled");
+                if (outlineEnabledIt != parameters.end()) {
+                    fc.outlineEnabled = (outlineEnabledIt->second == "true" || outlineEnabledIt->second == "1");
+                }
+                
+                auto outlineThicknessIt = parameters.find("skin.fonts." + iStr + ".outline.thickness");
+                if (outlineThicknessIt != parameters.end()) {
+                    try { fc.outlineThickness = std::stof(outlineThicknessIt->second); } catch (...) {}
+                }
+                
+                fc.outlineColor = parseHexColor("skin.fonts." + iStr + ".outline.color", sf::Color::Black);
+
+                if (fc.outlineEnabled) {
+                    LOG_INFO << "  Applied outline: enabled=true, thickness=" << fc.outlineThickness 
+                             << ", color=" << std::hex << std::uppercase << fc.outlineColor.toInteger() << std::dec << "\n";
                 }
                 
                 fontConfigs.push_back(std::move(fc));
@@ -197,8 +246,8 @@ public:
             LOG_INFO << "  " << kv.first << " = " << kv.second << "\n";
         }
         
-        loadFonts();
         loadFlashConfig();
+        loadFonts();
         parametersRefreshed = true;
         initialized = true;
         return 0;
@@ -228,6 +277,25 @@ public:
     
     // Get all font configs (for flash export)
     const std::vector<FontConfig>& getFontConfigs() const { return fontConfigs; }
+    
+    // Apply font styling (color and outline) to a text object
+    // If overrideColor is provided, it takes precedence over the font's fillColor
+    void applyFontStyle(sf::Text& text, int fontIndex, const sf::Color* overrideColor = nullptr) const {
+        const FontConfig* fc = getFontConfig(fontIndex);
+        if (fc) {
+            if (overrideColor) {
+                text.setFillColor(*overrideColor);
+            } else {
+                text.setFillColor(fc->fillColor);
+            }
+            
+            // Apply outline if enabled
+            if (fc->outlineEnabled && fc->outlineThickness > 0.0f) {
+                text.setOutlineColor(fc->outlineColor);
+                text.setOutlineThickness(fc->outlineThickness);
+            }
+        }
+    }
     
     // Get flash configuration
     const FlashConfig& getFlashConfig() const { return flashConfig; }

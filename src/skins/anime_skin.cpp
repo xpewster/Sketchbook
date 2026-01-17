@@ -67,6 +67,7 @@
     - "skin.hwmon.cpu.temp.icon.width": Width of CPU temperature icon
     - "skin.hwmon.cpu.temp.icon.height": Height of CPU temperature icon
     - "skin.hwmon.cpu.combine": Whether to combine CPU usage and temperature into one line
+    - "skin.hwmon.cpu.combinedivider": Separator string between usage and temp when combined
     - "skin.hwmon.mem.usage.text.x": X position of memory usage text
     - "skin.hwmon.mem.usage.text.y": Y position of memory usage text
     - "skin.hwmon.mem.usage.text.color": Color of memory usage text (hex RGB)
@@ -87,9 +88,13 @@
     - "skin.hwmon.train.next.icon.height": Height of next train icon
     
     Fonts:
-    - "skin.fonts.0.ttf": Path to first font TTF file (corresponding PCF should exist with same name)
-    - "skin.fonts.1.ttf": Path to second font TTF file
+    - "skin.fonts.font[id=0].ttf": Path to first font TTF file (corresponding PCF should exist with same name)
+    - "skin.fonts.font[id=1].ttf": Path to second font TTF file
     - ... etc
+    - "skin.fonts.font[id=N].color": Color of Nth font (hex RGB)
+    - "skin.fonts.font[id=N].outline.enabled": Enable font stroke
+    - "skin.fonts.font[id=N].outline.thickness": Thickness of outline
+    - "skin.fonts.font[id=N].outline.color": Color of outline (hex RGB)
     
     Flash mode:
     - "skin.flash.background": Enable flashing background layer (true/false)
@@ -212,6 +217,7 @@ private:
     bool hasCpuTempIcon = false;
     bool hasCpuTempText = false;
     bool cpuCombine = false;
+    std::string cpuCombinedDivider = " @ ";
     float cpuTempIconX = 0;
     float cpuTempIconY = 0;
     float cpuTempIconWidth = 32;
@@ -291,6 +297,15 @@ private:
             return it->second == "true" || it->second == "1" || it->second == "True";
         }
         LOG_WARN << "Boolean key not found: " << key << "\n";
+        return defaultVal;
+    }
+
+    std::string getParamString(const std::string& key, const std::string& defaultVal = "") {
+        auto it = parameters.find(key);
+        if (it != parameters.end()) {
+            return it->second;
+        }
+        LOG_WARN << "String key not found: " << key << "\n";
         return defaultVal;
     }
 
@@ -642,6 +657,7 @@ private:
         cpuTempTextSize = getParamInt("skin.hwmon.cpu.temp.text.size", 14);
         hasCpuTempText = hasParam("skin.hwmon.cpu.temp.text.x") && hasParam("skin.hwmon.cpu.temp.text.y");
         cpuCombine = getParamBool("skin.hwmon.cpu.combine", false);
+        cpuCombinedDivider = getParamString("skin.hwmon.cpu.combinedivider", " @ ");
         
         iconPath = getParam("skin.hwmon.cpu.temp.icon.path");
         if (!iconPath.empty()) hasCpuTempIcon = cpuTempIcon.loadFromFile(baseSkinDir + "/" + iconPath);
@@ -817,7 +833,7 @@ private:
                 snprintf(weatherStr, sizeof(weatherStr), "%.0f\u00B0F", weather.currentTemp);
                 sf::Text weatherText(*weatherFont, weatherStr, weatherTextSize);
                 weatherText.setPosition(sf::Vector2f(weatherTextX, weatherTextY));
-                weatherText.setFillColor(weatherTextColor);
+                applyFontStyle(weatherText, weatherTextFontIndex, &weatherTextColor);
                 texture.draw(weatherText);
             }
         }
@@ -840,13 +856,13 @@ private:
             if (hwmonFont) {
                 char cpuStr[64];
                 if (cpuCombine) {
-                    snprintf(cpuStr, sizeof(cpuStr), "CPU: %.0f%% @ %.0f\u00B0C", stats.cpuPercent, stats.cpuTempC);
+                    snprintf(cpuStr, sizeof(cpuStr), "CPU: %.0f%%%s%.0f\u00B0C", stats.cpuPercent, cpuCombinedDivider.c_str(), stats.cpuTempC);
                 } else {
                     snprintf(cpuStr, sizeof(cpuStr), "CPU: %.0f%%", stats.cpuPercent);
                 }
                 sf::Text cpuText(*hwmonFont, cpuStr, cpuUsageTextSize);
                 cpuText.setPosition(sf::Vector2f(cpuUsageTextX, cpuUsageTextY));
-                cpuText.setFillColor(cpuUsageTextColor);
+                applyFontStyle(cpuText, hwmonTextFontIndex, &cpuUsageTextColor);
                 texture.draw(cpuText);
             }
         }
@@ -871,7 +887,7 @@ private:
                 snprintf(tempStr, sizeof(tempStr), "Temp: %.0f\u00B0C", stats.cpuTempC);
                 sf::Text tempText(*hwmonFont, tempStr, cpuTempTextSize);
                 tempText.setPosition(sf::Vector2f(cpuTempTextX, cpuTempTextY));
-                tempText.setFillColor(cpuTempTextColor);
+                applyFontStyle(tempText, hwmonTextFontIndex, &cpuTempTextColor);
                 texture.draw(tempText);
             }
         }
@@ -896,7 +912,7 @@ private:
                 snprintf(memStr, sizeof(memStr), "Mem: %.0f%%", stats.memPercent);
                 sf::Text memText(*hwmonFont, memStr, memUsageTextSize);
                 memText.setPosition(sf::Vector2f(memUsageTextX, memUsageTextY));
-                memText.setFillColor(memUsageTextColor);
+                applyFontStyle(memText, hwmonTextFontIndex, &memUsageTextColor);
                 texture.draw(memText);
             }
         }
@@ -923,7 +939,7 @@ private:
                 snprintf(trainStr, sizeof(trainStr), "Next Train: %s | %s", train0Str.c_str(), train1Str.c_str());
                 sf::Text trainText(*hwmonFont, trainStr, trainNextTextSize);
                 trainText.setPosition(sf::Vector2f(trainNextTextX, trainNextTextY));
-                trainText.setFillColor(trainNextTextColor);
+                applyFontStyle(trainText, hwmonTextFontIndex, &trainNextTextColor);
                 texture.draw(trainText);
             }
         }

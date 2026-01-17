@@ -56,10 +56,9 @@
             </bobbing>
         </icon>
         <text>
-            <fontindex>1</fontindex>
+            <fontindex>0</fontindex>
             <x>138</x>
             <y>131</y>
-            <color>#000000</color>
             <size>64</size>
         </text>
     </weather>
@@ -70,7 +69,6 @@
                 <text>
                     <x>560</x>
                     <y>66</y>
-                    <color>#000000</color>
                     <size>40</size>
                 </text>
                 <icon>
@@ -85,7 +83,6 @@
                 <text>
                     <x>590</x>
                     <y>140</y>
-                    <color>#000000</color>
                     <size>30</size>
                 </text>
                 <icon>
@@ -97,13 +94,13 @@
                 </icon>
             </temp>
             <combine>True</combine>
+            <combinedivider> @ </combinedivider>
         </cpu>
         <mem>
             <usage>
                 <text>
                     <x>560</x>
                     <y>118</y>
-                    <color>#000000</color>
                     <size>40</size>
                 </text>
                 <icon>
@@ -120,7 +117,6 @@
 				<text>
 					<x>560</x>
 					<y>171</y>
-					<color>#000000</color>
 					<size>40</size>
 				</text>
                 <icon>
@@ -134,7 +130,15 @@
         </train>
     </hwmon>
     <fonts>
-        <font id="0"><ttf>font/handcaps.ttf</ttf></font>
+        <font id="0">
+            <ttf>font/OneStrokeScriptBold.ttf</ttf>
+            <outline>
+                <enabled>true</enabled>
+                <color>#000000</color>
+                <thickness>3</thickness>
+            </outline>
+            <color>#FFFFFF</color>
+        </font>
         <font id="1"><ttf>font/NationalPark-Outline.ttf</ttf></font>
     </fonts>
     <flash>
