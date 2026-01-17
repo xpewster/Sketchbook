@@ -7,6 +7,12 @@ MSG_FULL_FRAME = 0x00
 MSG_DIRTY_RECTS = 0x01
 MSG_NO_CHANGE = 0x02
 MSG_FLASH_DATA = 0x03
+MSG_RESET = 0x04
+MSG_SET_MODE = 0x05  # Mode selection message
+
+# Mode constants
+MODE_FULL_STREAMING = 0x00
+MODE_FLASH = 0x01
 
 # Shared buffers (to be set by main code)
 header_buffer = None
@@ -41,6 +47,15 @@ def recv_exact(client, buffer, count):
             print(f"Recv error: {e}")
             return False
     return True
+
+
+def send_ack(client):
+    """Send ACK byte. Returns True on success."""
+    try:
+        client.send(b'\x00')
+        return True
+    except OSError:
+        return False
 
 
 def receive_full_frame(client):
@@ -166,57 +181,73 @@ def receive_flash_data(client, flash_mgr):
     }
 
 
-def handle_frame_streaming(client):
-    """Handle streaming mode frame. Returns True on success."""
-    global last_dirty_dims
+def handle_common_message(client, msg_type):
+    """Handle message types common to both streaming and flash modes.
     
+    Returns:
+        True: Message handled successfully
+        False: Error or disconnect
+        ('mode_change', mode): Mode change requested
+        None: Message type not handled (caller should handle it)
+    """
+    if msg_type == MSG_FULL_FRAME:
+        if not receive_full_frame(client):
+            return False
+        if not send_ack(client):
+            return False
+        return True
+    
+    elif msg_type == MSG_DIRTY_RECTS:
+        if not recv_exact(client, header_buffer, 1):
+            return False
+        rect_count = header_buffer[0]
+        if rect_count > 0:
+            if not receive_dirty_rects(client, rect_count):
+                return False
+        if not send_ack(client):
+            return False
+        return True
+    
+    elif msg_type == MSG_NO_CHANGE:
+        if not send_ack(client):
+            return False
+        return True
+    
+    elif msg_type == MSG_SET_MODE:
+        if not recv_exact(client, header_buffer, 1):
+            return False
+        mode = header_buffer[0]
+        if not send_ack(client):
+            return False
+        return ('mode_change', mode)
+    
+    elif msg_type == MSG_RESET:
+        send_ack(client)  # Best effort
+        import microcontroller
+        microcontroller.reset()
+        return False  # Won't reach here
+    
+    # Unknown/unhandled message type
+    return None
+
+
+def handle_frame_streaming(client):
+    """Handle streaming mode frame. Returns True on success, 'mode_change' tuple on mode switch."""
     if not recv_exact(client, header_buffer, 1):
         return False
     
     msg_type = header_buffer[0]
     
-    if msg_type == MSG_FULL_FRAME:
-        if not receive_full_frame(client):
-            return False
-        # Send ACK
-        try:
-            client.send(b'\x00')
-        except OSError:
-            return False
-        return True
-    elif msg_type == MSG_DIRTY_RECTS:
-        if not recv_exact(client, header_buffer, 1):
-            return False
-        rect_count = header_buffer[0]
-        if rect_count == 0:
-            # Send ACK even for no change
-            try:
-                client.send(b'\x00')
-            except OSError:
-                return False
-            return True
-        if not receive_dirty_rects(client, rect_count):
-            return False
-        # Send ACK
-        try:
-            client.send(b'\x00')
-        except OSError:
-            return False
-        return True
-    elif msg_type == MSG_NO_CHANGE:
-        # Send ACK
-        try:
-            client.send(b'\x00')
-        except OSError:
-            return False
-        return True
-    else:
-        print(f"Unknown message type: {msg_type}")
-        return False
+    result = handle_common_message(client, msg_type)
+    if result is not None:
+        return result
+    
+    print(f"Unknown message type: {msg_type}")
+    return False
 
 
 def handle_frame_flash(client, flash_mgr, group):
-    """Handle flash mode frame. Returns True on success."""
+    """Handle flash mode frame. Returns True on success, 'mode_change' tuple on mode switch."""
     global last_dirty_dims
     
     if not recv_exact(client, header_buffer, 1):
@@ -225,6 +256,7 @@ def handle_frame_flash(client, flash_mgr, group):
     
     msg_type = header_buffer[0]
     
+    # Handle flash-specific message
     if msg_type == MSG_FLASH_DATA:
         data = receive_flash_data(client, flash_mgr)
         if data is None:
@@ -251,54 +283,19 @@ def handle_frame_flash(client, flash_mgr, group):
             min_x, min_y, max_x, max_y = last_dirty_dims
             flash_mgr.stream_bitmap.dirty(min_x, min_y, max_x, max_y)
         
-        # Send ACK byte to signal frame processed
-        try:
-            client.send(b'\x00')
-        except OSError:
+        if not send_ack(client):
             print("Failed to send ACK for flash frame")
             return False
         
         return True
     
-    # Fall back to streaming mode messages
-    elif msg_type == MSG_FULL_FRAME:
-        if not receive_full_frame(client):
-            return False
-        # Send ACK
-        try:
-            client.send(b'\x00')
-        except OSError:
-            return False
-        return True
-    elif msg_type == MSG_DIRTY_RECTS:
-        if not recv_exact(client, header_buffer, 1):
-            return False
-        rect_count = header_buffer[0]
-        if rect_count == 0:
-            # Send ACK even for no change
-            try:
-                client.send(b'\x00')
-            except OSError:
-                return False
-            return True
-        if not receive_dirty_rects(client, rect_count):
-            return False
-        # Send ACK
-        try:
-            client.send(b'\x00')
-        except OSError:
-            return False
-        return True
-    elif msg_type == MSG_NO_CHANGE:
-        # Send ACK
-        try:
-            client.send(b'\x00')
-        except OSError:
-            return False
-        return True
-    else:
-        print(f"Unknown message type: {msg_type}")
-        return False
+    # Try common message handler
+    result = handle_common_message(client, msg_type)
+    if result is not None:
+        return result
+    
+    print(f"Unknown message type: {msg_type}")
+    return False
 
 
 def get_last_dirty_dims():

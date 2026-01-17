@@ -10,6 +10,7 @@ import time
 import os
 import wifi
 import socketpool
+import microcontroller
 
 try:
     import gifio
@@ -19,6 +20,42 @@ except ImportError:
 from config import parse_config
 from flash import FlashModeManager
 import network
+from network import MODE_FULL_STREAMING, MODE_FLASH
+
+# ==============================
+# Mode Persistence (NVM)
+# ==============================
+
+# NVM layout:
+# Byte 0: Mode magic marker (0xAB = valid mode stored)
+# Byte 1: Mode value (MODE_FULL_STREAMING or MODE_FLASH)
+NVM_MODE_MAGIC = 0xAB
+NVM_MODE_OFFSET = 0
+NVM_MODE_VALUE_OFFSET = 1
+
+
+def load_saved_mode():
+    """Load the saved mode from NVM. Returns MODE_FULL_STREAMING if none saved."""
+    try:
+        if microcontroller.nvm[NVM_MODE_OFFSET] == NVM_MODE_MAGIC:
+            mode = microcontroller.nvm[NVM_MODE_VALUE_OFFSET]
+            if mode in (MODE_FULL_STREAMING, MODE_FLASH):
+                print(f"Loaded saved mode: {'flash' if mode == MODE_FLASH else 'streaming'}")
+                return mode
+    except Exception as e:
+        print(f"Failed to load saved mode: {e}")
+    return MODE_FULL_STREAMING
+
+
+def save_mode(mode):
+    """Save the current mode to NVM."""
+    try:
+        microcontroller.nvm[NVM_MODE_OFFSET] = NVM_MODE_MAGIC
+        microcontroller.nvm[NVM_MODE_VALUE_OFFSET] = mode
+        print(f"Saved mode: {'flash' if mode == MODE_FLASH else 'streaming'}")
+    except Exception as e:
+        print(f"Failed to save mode: {e}")
+
 
 # ==============================
 # TFT Setup
@@ -131,14 +168,24 @@ header_buffer = bytearray(256)
 network.init_buffers(header_buffer, stream_buffer_bytes, stream_bitmap, FRAME_WIDTH, FRAME_HEIGHT)
 
 # ==============================
+# Load Saved Mode
+# ==============================
+
+current_mode = load_saved_mode()
+print(f"Current mode: {'flash' if current_mode == MODE_FLASH else 'streaming'}")
+
+# ==============================
 # Idle/Loading GIF
 # ==============================
 
 gif = None
 gif_tilegrid = None
 
+
 def load_gif(path):
     """Try to load a GIF file. Returns (gif, tilegrid) or (None, None)."""
+    if gifio is None:
+        return None, None
     try:
         g = gifio.OnDiskGif(path)
         tg = displayio.TileGrid(
@@ -149,16 +196,28 @@ def load_gif(path):
     except Exception:
         return None, None
 
-# Try skin-specific loading GIF first, then default
-gif, gif_tilegrid = load_gif("/flash_assets/loading.gif")
-if gif:
-    print("Loaded skin loading GIF")
-else:
-    gif, gif_tilegrid = load_gif("/test/sketchbook.gif")
-    if gif:
+
+def load_appropriate_gif(mode):
+    """Load the appropriate loading GIF based on mode."""
+    if mode == MODE_FLASH:
+        # Try skin-specific loading GIF for flash mode
+        g, tg = load_gif("/flash_assets/loading.gif")
+        if g:
+            print("Loaded flash mode loading GIF")
+            return g, tg
+    
+    # Fall back to default idle GIF for streaming mode
+    g, tg = load_gif("/test/sketchbook.gif")
+    if g:
         print("Loaded default idle GIF")
-    else:
-        print("No idle GIF available")
+        return g, tg
+    
+    print("No idle GIF available")
+    return None, None
+
+
+# Load the appropriate GIF based on saved mode
+gif, gif_tilegrid = load_appropriate_gif(current_mode)
 
 # Show loading GIF immediately (first frame) before loading flash assets
 if gif_tilegrid:
@@ -170,19 +229,37 @@ if gif_tilegrid:
 # Flash Mode Initialization
 # ==============================
 
-flash_mode_enabled = False
 flash_mgr = None
+flash_assets_loaded = False
 
-config = parse_config("/flash_assets/config.txt")
-if config:
-    print("Flash config found")
-    flash_mgr = FlashModeManager(config, FRAME_WIDTH, FRAME_HEIGHT)
-    if flash_mgr.load_assets():
-        flash_mode_enabled = True
-        print("Flash mode enabled")
+
+def try_load_flash_assets():
+    """Attempt to load flash assets. Returns True if successful."""
+    global flash_mgr, flash_assets_loaded
+    
+    if flash_assets_loaded:
+        return True
+    
+    config = parse_config("/flash_assets/config.txt")
+    if config:
+        print("Flash config found")
+        flash_mgr = FlashModeManager(config, FRAME_WIDTH, FRAME_HEIGHT)
+        if flash_mgr.load_assets():
+            flash_assets_loaded = True
+            print("Flash assets loaded successfully")
+            return True
+        else:
+            print("Flash assets failed to load")
+            flash_mgr = None
     else:
-        print("Flash mode disabled, using streaming mode")
-        flash_mgr = None
+        print("No flash config found")
+    
+    return False
+
+
+# If saved mode is flash, try to pre-load flash assets
+if current_mode == MODE_FLASH:
+    try_load_flash_assets()
 
 # ==============================
 # WiFi Setup
@@ -214,6 +291,71 @@ if wifi_connected:
     print(f"TCP server listening on port {TCP_PORT}")
 
 # ==============================
+# Mode Switching
+# ==============================
+
+def switch_mode(new_mode):
+    """Switch to a new mode. Returns True if mode actually changed."""
+    global current_mode, gif, gif_tilegrid, flash_mgr, flash_assets_loaded
+    
+    if new_mode == current_mode:
+        return False
+    
+    print(f"Switching mode: {'flash' if current_mode == MODE_FLASH else 'streaming'} -> {'flash' if new_mode == MODE_FLASH else 'streaming'}")
+    
+    # Save new mode
+    current_mode = new_mode
+    save_mode(new_mode)
+    
+    # If switching to flash mode, ensure assets are loaded
+    if new_mode == MODE_FLASH and not flash_assets_loaded:
+        if not try_load_flash_assets():
+            print("Warning: Flash mode selected but assets failed to load, falling back to streaming")
+            current_mode = MODE_FULL_STREAMING
+            save_mode(MODE_FULL_STREAMING)
+            return True
+    
+    return True
+
+
+def setup_connected_display():
+    """Set up the display group for connected state based on current mode."""
+    global group
+    
+    display.auto_refresh = False
+    
+    # Clear display group
+    while len(group) > 0:
+        group.pop()
+    
+    if current_mode == MODE_FLASH and flash_assets_loaded and flash_mgr:
+        # Build flash mode display
+        flash_mgr.build_display_group(group)
+        print("Display configured for flash mode")
+    else:
+        # Show streaming bitmap
+        group.append(stream_tilegrid)
+        print("Display configured for streaming mode")
+
+
+def setup_disconnected_display():
+    """Set up the display group for disconnected state (show loading GIF)."""
+    global group, gif, gif_tilegrid
+    
+    display.auto_refresh = False
+    
+    # Clear display group
+    while len(group) > 0:
+        group.pop()
+    
+    # Reload appropriate GIF if mode changed
+    gif, gif_tilegrid = load_appropriate_gif(current_mode)
+    
+    if gif_tilegrid:
+        group.append(gif_tilegrid)
+
+
+# ==============================
 # Main Loop
 # ==============================
 
@@ -237,19 +379,8 @@ while True:
             connected = True
             print(f"Client connected from {addr}")
             
-            # Switch from loading GIF to active mode display
-            display.auto_refresh = False
-            
-            # Clear display group (remove loading GIF)
-            while len(group) > 0:
-                group.pop()
-            
-            if flash_mode_enabled and flash_mgr:
-                # Build flash mode display
-                flash_mgr.build_display_group(group)
-            else:
-                # Show streaming bitmap
-                group.append(stream_tilegrid)
+            # Set up display for connected mode
+            setup_connected_display()
             
             frame_count = 0
             fps_start = time.monotonic()
@@ -259,14 +390,22 @@ while True:
     # Handle connected client
     if connected:
         try:
-            if flash_mode_enabled:
-                success = network.handle_frame_flash(client_socket, flash_mgr, group)
+            if current_mode == MODE_FLASH and flash_assets_loaded and flash_mgr:
+                result = network.handle_frame_flash(client_socket, flash_mgr, group)
             else:
-                success = network.handle_frame_streaming(client_socket)
+                result = network.handle_frame_streaming(client_socket)
             
-            if success:
+            # Check for mode change
+            if isinstance(result, tuple) and result[0] == 'mode_change':
+                new_mode = result[1]
+                if switch_mode(new_mode):
+                    # Mode changed, reconfigure display
+                    setup_connected_display()
+                continue
+            
+            if result:
                 # Refresh display
-                if not flash_mode_enabled:
+                if not (current_mode == MODE_FLASH and flash_assets_loaded):
                     min_x, min_y, max_x, max_y = network.get_last_dirty_dims()
                     stream_bitmap.dirty(min_x, min_y, max_x, max_y)
                 
@@ -287,11 +426,7 @@ while True:
                 connected = False
                 
                 # Switch back to loading GIF
-                display.auto_refresh = False
-                while len(group) > 0:
-                    group.pop()
-                if gif_tilegrid:
-                    group.append(gif_tilegrid)
+                setup_disconnected_display()
                     
         except Exception as e:
             print(f"Error handling client: {e}")
@@ -303,11 +438,7 @@ while True:
             connected = False
             
             # Switch back to loading GIF on error
-            display.auto_refresh = False
-            while len(group) > 0:
-                group.pop()
-            if gif_tilegrid:
-                group.append(gif_tilegrid)
+            setup_disconnected_display()
     
     # Idle animation when not connected - always show loading GIF
     if not connected:

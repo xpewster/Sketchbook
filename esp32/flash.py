@@ -67,11 +67,6 @@ class FlashModeManager:
         
         assets_dir = "/flash_assets"
         
-        # Check for ENABLED marker
-        if not self._file_exists(f"{assets_dir}/ENABLED"):
-            print("Flash mode not enabled (no ENABLED marker)")
-            return False
-        
         # Load background
         if get_config_bool(self.config, 'bg_enabled'):
             bg_file = get_config(self.config, 'bg_file', '')
