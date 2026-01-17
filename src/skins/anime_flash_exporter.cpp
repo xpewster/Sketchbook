@@ -52,9 +52,6 @@ public:
         // Generate config file
         if (!generateConfig(skin, result)) return result;
         
-        // Create ENABLED marker file
-        if (!createEnabledMarker(result)) return result;
-        
         result.success = true;
         LOG_INFO << "Flash export complete: " << result.exportedFiles.size() 
                   << " files, " << result.totalBytes << " bytes\n";

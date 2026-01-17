@@ -180,43 +180,16 @@ public:
         return std::filesystem::exists(targetDrive_ + "FLASHABLE");
     }
     
-    // Remove ENABLED marker to disable flash mode
-    bool disableFlashMode() {
-        if (!isFlashable()) {
-            return false;  // Safety check
-        }
-        std::string markerPath = assetDir_ + "ENABLED";
-        if (std::filesystem::exists(markerPath)) {
-            try {
-                std::filesystem::remove(markerPath);
-                return true;
-            } catch (const std::exception& e) {
-                LOG_ERROR << "Failed to remove ENABLED marker: " << e.what() << "\n";
-                return false;
-            }
-        }
-        return true;
-    }
-    
-    // Create ENABLED marker to enable flash mode
-    bool enableFlashMode() {
-        if (!isFlashable()) {
-            return false;  // Safety check
-        }
+    // Check if flash assets exist on the device
+    bool hasFlashAssets() const {
         if (!std::filesystem::exists(assetDir_)) {
-            return false;  // Asset directory must exist
+            return false;
         }
-        std::string markerPath = assetDir_ + "ENABLED";
-        std::ofstream marker(markerPath);
-        return marker.good();
+        // Check if config.txt exists (required for flash mode)
+        return std::filesystem::exists(assetDir_ + "config.txt");
     }
     
-    // Check if flash mode is currently enabled on device
-    bool isFlashEnabled() const {
-        return std::filesystem::exists(assetDir_ + "ENABLED");
-    }
-    
-    // Clear all files from asset directory (except ENABLED marker)
+    // Clear all files from asset directory
     bool clearAssetDirectory() {
         if (!isFlashable()) {
             return false;  // Safety check
@@ -226,7 +199,6 @@ public:
         }
         try {
             for (const auto& entry : std::filesystem::directory_iterator(assetDir_)) {
-                // Don't delete ENABLED marker here - let caller decide
                 std::filesystem::remove_all(entry.path());
             }
             return true;
@@ -244,19 +216,6 @@ public:
 protected:
     std::string targetDrive_;
     std::string assetDir_;
-    
-    // Create the ENABLED marker file
-    bool createEnabledMarker(ExportResult& result) {
-        std::string markerPath = assetDir_ + "ENABLED";
-        std::ofstream marker(markerPath);
-        if (!marker) {
-            result.error = "Failed to create ENABLED marker";
-            return false;
-        }
-        marker.close();
-        result.exportedFiles.push_back("ENABLED");
-        return true;
-    }
     
     // Ensure the asset directory exists and is on a flashable drive
     bool ensureAssetDirectory(ExportResult& result) {

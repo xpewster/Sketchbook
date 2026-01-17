@@ -3,22 +3,46 @@
 #include <shellapi.h>
 #include <thread>
 #include <atomic>
+#include <vector>
+#include <string>
+#include <mutex>
 #include "rc.h"
 #include "log.hpp"
+#include "tcp.hpp"
 
 #define WM_TRAYICON (WM_USER + 1)
+
+
+enum TrayMenuID {
+    MENU_OPEN = 1,
+    MENU_CONNECT = 2,
+    MENU_REFRESH_SKIN = 3,
+    MENU_CLOSE = 4,
+    MENU_SKIN_BASE = 100  // Skin submenu items start at 100
+};
 
 class TrayManager {
 private:
     NOTIFYICONDATA nid;
     HMENU hMenu;
+    HMENU hSkinMenu;
     HWND trayHwnd;          // Hidden window for receiving tray messages
     HWND mainHwnd;          // SFML window handle
     std::thread messageThread;
     
     std::atomic<bool> shouldRestore;
     std::atomic<bool> shouldExit;
+    std::atomic<bool> shouldConnect;
+    std::atomic<bool> shouldDisconnect;
+    std::atomic<bool> shouldRefreshSkin;
+    std::atomic<int> selectedSkinIndex;  // -1 means no selection
     std::atomic<bool> running;
+    
+    std::atomic<ConnectionState> connectionState;
+    
+    std::vector<std::wstring> skinNames;
+    std::mutex skinMutex;
+    int currentSkinIndex;
     
     // Window procedure for the hidden tray window
     static LRESULT CALLBACK TrayWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
@@ -34,7 +58,7 @@ private:
         switch (uMsg) {
             case WM_TRAYICON:
                 switch (lParam) {
-                    case WM_LBUTTONDBLCLK:
+                    case WM_LBUTTONDOWN:
                         shouldRestore = true;
                         break;
                         
@@ -43,17 +67,16 @@ private:
                         POINT pt;
                         GetCursorPos(&pt);
                         
+                        // Update menu state before showing
+                        UpdateMenuState();
+                        
                         // Required for menu to work properly
                         SetForegroundWindow(hWnd);
                         
                         int cmd = TrackPopupMenu(hMenu, TPM_RETURNCMD | TPM_NONOTIFY,
                                                 pt.x, pt.y, 0, hWnd, NULL);
                         
-                        if (cmd == 1) {  // Open
-                            shouldRestore = true;
-                        } else if (cmd == 2) {  // Exit
-                            shouldExit = true;
-                        }
+                        HandleMenuCommand(cmd);
                         break;
                     }
                 }
@@ -65,6 +88,82 @@ private:
                 break;
         }
         return DefWindowProc(hWnd, uMsg, wParam, lParam);
+    }
+    
+    void HandleMenuCommand(int cmd) {
+        if (cmd == MENU_OPEN) {
+            shouldRestore = true;
+        } else if (cmd == MENU_CONNECT) {
+            ConnectionState state = connectionState.load();
+            if (state == ConnectionState::Disconnected) {
+                shouldConnect = true;
+            } else if (state == ConnectionState::Connected) {
+                shouldDisconnect = true;
+            }
+            // Do nothing if Connecting
+        } else if (cmd == MENU_REFRESH_SKIN) {
+            shouldRefreshSkin = true;
+        } else if (cmd == MENU_CLOSE) {
+            shouldExit = true;
+        } else if (cmd >= MENU_SKIN_BASE) {
+            // Skin selection
+            int skinIndex = cmd - MENU_SKIN_BASE;
+            std::lock_guard<std::mutex> lock(skinMutex);
+            if (skinIndex >= 0 && skinIndex < static_cast<int>(skinNames.size())) {
+                selectedSkinIndex = skinIndex;
+            }
+        }
+    }
+    
+    void UpdateMenuState() {
+        // Update Connect/Disconnect item
+        ConnectionState state = connectionState.load();
+        
+        MENUITEMINFO mii = { 0 };
+        mii.cbSize = sizeof(MENUITEMINFO);
+        mii.fMask = MIIM_STRING | MIIM_STATE;
+        
+        switch (state) {
+            case ConnectionState::Disconnected:
+                mii.dwTypeData = const_cast<LPWSTR>(L"Connect");
+                mii.fState = MFS_ENABLED;
+                break;
+            case ConnectionState::Connecting:
+                mii.dwTypeData = const_cast<LPWSTR>(L"Connecting...");
+                mii.fState = MFS_GRAYED;
+                break;
+            case ConnectionState::Connected:
+                mii.dwTypeData = const_cast<LPWSTR>(L"Disconnect");
+                mii.fState = MFS_ENABLED;
+                break;
+        }
+        
+        SetMenuItemInfo(hMenu, MENU_CONNECT, FALSE, &mii);
+        
+        // Update skin submenu checkmarks
+        std::lock_guard<std::mutex> lock(skinMutex);
+        for (int i = 0; i < static_cast<int>(skinNames.size()); i++) {
+            CheckMenuItem(hSkinMenu, MENU_SKIN_BASE + i, 
+                         (i == currentSkinIndex) ? MF_CHECKED : MF_UNCHECKED);
+        }
+    }
+    
+    void RebuildSkinMenu() {
+        // Clear existing items
+        while (DeleteMenu(hSkinMenu, 0, MF_BYPOSITION)) {}
+        
+        std::lock_guard<std::mutex> lock(skinMutex);
+        for (int i = 0; i < static_cast<int>(skinNames.size()); i++) {
+            UINT flags = MF_STRING;
+            if (i == currentSkinIndex) {
+                flags |= MF_CHECKED;
+            }
+            AppendMenuW(hSkinMenu, flags, MENU_SKIN_BASE + i, skinNames[i].c_str());
+        }
+        
+        if (skinNames.empty()) {
+            AppendMenuW(hSkinMenu, MF_STRING | MF_GRAYED, 0, L"(No skins)");
+        }
     }
     
     // Thread function that runs the Windows message loop
@@ -106,10 +205,8 @@ private:
         nid.uID = 1;
         nid.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
         nid.uCallbackMessage = WM_TRAYICON;
-        // nid.uVersion = NOTIFYICON_VERSION_4; 
         
         // Try to load custom icon from resources
-        // nid.hIcon = LoadIcon(NULL, IDI_APPLICATION);
         nid.hIcon = (HICON)LoadImage(GetModuleHandle(NULL), MAKEINTRESOURCE(IDI_ICON1), 
                                      IMAGE_ICON, 64, 64, LR_SHARED);
         if (!nid.hIcon) {
@@ -119,11 +216,19 @@ private:
         
         lstrcpy(nid.szTip, L"Sketchbook");
         
+        // Create skin submenu
+        hSkinMenu = CreatePopupMenu();
+        AppendMenuW(hSkinMenu, MF_STRING | MF_GRAYED, 0, L"(No skins)");
+        
         // Create context menu
         hMenu = CreatePopupMenu();
-        AppendMenu(hMenu, MF_STRING, 1, L"Open");
-        AppendMenu(hMenu, MF_SEPARATOR, 0, NULL);
-        AppendMenu(hMenu, MF_STRING, 2, L"Close");
+        AppendMenuW(hMenu, MF_STRING, MENU_OPEN, L"Open");
+        AppendMenuW(hMenu, MF_SEPARATOR, 0, NULL);
+        AppendMenuW(hMenu, MF_STRING, MENU_CONNECT, L"Connect");
+        AppendMenuW(hMenu, MF_STRING | MF_POPUP, (UINT_PTR)hSkinMenu, L"Change skin");
+        AppendMenuW(hMenu, MF_STRING, MENU_REFRESH_SKIN, L"Refresh skin");
+        AppendMenuW(hMenu, MF_SEPARATOR, 0, NULL);
+        AppendMenuW(hMenu, MF_STRING, MENU_CLOSE, L"Close");
         
         running = true;
         
@@ -136,6 +241,7 @@ private:
         
         // Cleanup
         Shell_NotifyIcon(NIM_DELETE, &nid);
+        DestroyMenu(hSkinMenu);
         DestroyMenu(hMenu);
         DestroyWindow(trayHwnd);
         running = false;
@@ -143,8 +249,11 @@ private:
     
 public:
     TrayManager(HWND sfmlWindow) 
-        : mainHwnd(sfmlWindow), trayHwnd(NULL), hMenu(NULL),
-          shouldRestore(false), shouldExit(false), running(false) {
+        : mainHwnd(sfmlWindow), trayHwnd(NULL), hMenu(NULL), hSkinMenu(NULL),
+          shouldRestore(false), shouldExit(false), shouldConnect(false),
+          shouldDisconnect(false), shouldRefreshSkin(false), selectedSkinIndex(-1),
+          running(false), connectionState(ConnectionState::Disconnected),
+          currentSkinIndex(-1) {
         
         ZeroMemory(&nid, sizeof(NOTIFYICONDATA));
         
@@ -192,6 +301,57 @@ public:
     // Check if user clicked exit from tray menu
     bool ShouldExit() {
         return shouldExit.load();
+    }
+    
+    // Check if user clicked Connect
+    bool ShouldConnect() {
+        return shouldConnect.exchange(false);
+    }
+    
+    // Check if user clicked Disconnect
+    bool ShouldDisconnect() {
+        return shouldDisconnect.exchange(false);
+    }
+    
+    // Check if user clicked Refresh skin
+    bool ShouldRefreshSkin() {
+        return shouldRefreshSkin.exchange(false);
+    }
+    
+    int GetSelectedSkinIndex() {
+        return selectedSkinIndex.exchange(-1);
+    }
+    
+    void SetConnectionState(ConnectionState state) {
+        connectionState = state;
+    }
+    
+    // Set available skins
+    void SetSkinList(const std::vector<std::string>& skins, int currentIndex = -1) {
+        {
+            std::lock_guard<std::mutex> lock(skinMutex);
+            skinNames.clear();
+            for (const auto& skin : skins) {
+                // Convert UTF-8 to wide string
+                int wideLen = MultiByteToWideChar(CP_UTF8, 0, skin.c_str(), -1, NULL, 0);
+                std::wstring wideSkin(wideLen - 1, 0);
+                MultiByteToWideChar(CP_UTF8, 0, skin.c_str(), -1, &wideSkin[0], wideLen);
+                skinNames.push_back(wideSkin);
+            }
+            currentSkinIndex = currentIndex;
+        }
+        
+        // Rebuild submenu on the message thread
+        if (trayHwnd) {
+            // Post a custom message or just rebuild directly since we hold the lock
+            RebuildSkinMenu();
+        }
+    }
+    
+    // Set current skin index (for checkmark)
+    void SetCurrentSkinIndex(int index) {
+        std::lock_guard<std::mutex> lock(skinMutex);
+        currentSkinIndex = index;
     }
 
     // Used for lazy initialization of TrayManager before we have the SFML window handle

@@ -10,6 +10,7 @@
 #include "tcp.hpp"
 #include "tray.hpp"
 #include "utils/rgb565.h"
+#include "utils/util.h"
 #include "limit_instance.h"
 #include "startup.hpp"
 
@@ -102,7 +103,6 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
     // Create the window when needed
     auto createWindow = [&]() {
         if (!window.has_value()) {
-            LOG_INFO << "Creating main window...\n";
             window.emplace(sf::VideoMode(sf::Vector2u(windowWidth, windowHeight)), "Sketchbook", sf::Style::Titlebar | sf::Style::Close);
             window->setFramerateLimit(30);
             hwnd = window->getNativeHandle();
@@ -112,10 +112,11 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
     
     // Only create window immediately if not starting minimized
     if (!settings.preferences.startMinimized) {
+        LOG_INFO << "Creating main window...\n";
         createWindow();
         LOG_INFO << "Main window created\n";
     } else {
-        LOG_INFO << "Starting minimized on startup (window creation deferred)\n";
+        LOG_INFO << "Starting minimized on startup\n"; // Window creation deferred
     }
 
     // Load font
@@ -158,12 +159,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
     } else {
         LOG_WARN << "Skins directory not found: " << skinsPath << "\n";
     }
-
-    // Check if drive is already flash enabled
-    flash::AnimeSkinFlashExporter flashChecker(settings.network.espDrive);
-    if (flashChecker.isFlashable() && flashChecker.isFlashEnabled()) {
+    if (settings.preferences.flashMode) {
         LOG_INFO << "Flash enabled for drive " << settings.network.espDrive << "\n";
-        settings.preferences.flashMode = true;
     }
     
     // Create render texture at Qualia's native resolution
@@ -203,14 +200,14 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
     for (const auto& pair : skins) {
         skinOptions.push_back(pair.first);
     }
-    int defaultSkinIndex = 0;
-    for (size_t i = 0; i < skinOptions.size(); ++i) {
-        if (skinOptions[i] == skinName) {
-            defaultSkinIndex = static_cast<int>(i);
-            skins[skinName]->initialize(skinsPath + skinName + "/skin.xml"); // Initialize the selected skin
-            break;
-        }
+    int defaultSkinIndex = getSkinIndex(skinOptions, skinName);
+    if (defaultSkinIndex == -1) {
+        LOG_WARN << "Selected skin '" << skinName << "' not found. Defaulting to first available skin.\n";
+        defaultSkinIndex = 0;
+        skinName = skinOptions[0];
     }
+    skins[skinName]->initialize(skinsPath + skinName + "/skin.xml"); // Initialize the selected skin
+    trayManager.SetSkinList(skinOptions, defaultSkinIndex); // Only happens once for now
     DropdownSelector skinDropdown(240, 8, 120, 24, skinOptions, font, defaultSkinIndex);
     Button refreshBtn(370, 8, 24, 24, "", font);
     sf::Texture refreshIconTexture;
@@ -293,6 +290,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
     sf::Clock logFlushClock;
     sf::Clock lastConnectAttemptClock;
     bool firstConnectionAttempt = true; // Allow immediate first attempt without waiting
+    bool pendingModeSync = false; // Track if we need to send mode selection after connection
 
     auto attemptConnection = [&]() {
         connectionState = ConnectionState::Connecting;
@@ -313,6 +311,53 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
             LOG_INFO << "Connection attempt to " << ip << ":" << port << (connectResult ? " succeeded" : " failed") << "\n";
             connectFinished = true;
         });
+    };
+
+    auto disconnect = [&]() {
+        sender.stop();
+        connection.disconnect();
+        connected = false;
+        connectionState = ConnectionState::Disconnected;
+        statusMsg = "Disconnected";
+        connectBtn.setLabel("Connect");
+        connectBtn.setColor(sf::Color(100, 255, 100), sf::Color(150, 255, 150));
+        statusIndicator.setFillColor(sf::Color::Red);
+    };
+
+    auto selectSkin = [&](const std::string& newSkinName) {
+        LOG_INFO << "Skin changed from " << settings.preferences.selectedSkin << " to: " << newSkinName << " (" << (skins[newSkinName]->initialized ? "initialized" : "not initialized") << ")\n";
+        settings.preferences.selectedSkin = newSkinName;
+        int currentSkinIndex = getSkinIndex(skinOptions, newSkinName);
+        
+        if (!skins[newSkinName]->initialized) {
+            LOG_INFO << "First time initializing skin: " << newSkinName << "\n";
+            skins[newSkinName]->initialize(("skins/" + newSkinName + "/skin.xml").c_str());
+        }
+
+        if (skins[newSkinName]->hasFlashConfig()) {
+            LOG_INFO << "New skin supports flash mode. Defaultly enabling flash mode for new skin.\n";
+            flashModeCB.setChecked(true, true);
+            settings.preferences.flashMode = true;
+        }
+    };
+
+    // Helper to send mode selection to remote
+    auto syncModeToDevice = [&]() -> bool {
+        if (!connected) {
+            LOG_WARN << "Cannot sync mode - not connected\n";
+            return false;
+        }
+        
+        LOG_INFO << "Syncing mode to device: " << (settings.preferences.flashMode ? "flash" : "streaming") << "\n";
+        
+        if (sender.sendModeSelection(settings.preferences.flashMode)) {
+            LOG_INFO << "Mode selection sent and acknowledged\n";
+            sender.invalidateDirtyTracker(); // Invalidate dirty tracker to force full redraw in new mode
+            return true;
+        } else {
+            LOG_ERROR << "Failed to send mode selection\n";
+            return false;
+        }
     };
 
     bool running = true;
@@ -354,7 +399,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
             bool mousePressed = false;
             sf::Vector2i mousePos = sf::Mouse::getPosition(*window);
             
-            bool enabledFlashDuringEvents = false;
+            
             while (const std::optional<sf::Event> event = window->pollEvent()) {
                 if (event->is<sf::Event::Closed>()) {
                     if (settings.preferences.closeToTray) {
@@ -372,24 +417,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
                 skinDropdown.handleEvent(*event, mousePos, *window);
                 skinName = skinDropdown.getSelectedValue();
                 if (skinName != settings.preferences.selectedSkin) {
-                    LOG_INFO << "Skin changed from " << settings.preferences.selectedSkin << " to: " << skinName << " (" << (skins[skinName]->initialized ? "initialized" : "not initialized") << ")\n";
-                    settings.preferences.selectedSkin = skinName;
-                    debugFlag = true;
-                    if (!skins[skinName]->initialized) {
-                        LOG_INFO << "First time initializing skin: " << skinName << "\n";
-                        skins[skinName]->initialize(("skins/" + skinName + "/skin.xml").c_str());
-                    }
-
-                    // Check if new skin supports flash mode and if flash mode is already enabled. 
-                    if (skins[skinName]->hasFlashConfig()) {
-                        flash::AnimeSkinFlashExporter flashChecker(settings.network.espDrive);
-                        if (flashChecker.isFlashable() && flashChecker.isFlashEnabled()) {
-                            LOG_INFO << "New skin supports flash mode and flash mode is already enabled on the drive. Enabling flash mode for new skin.\n";
-                            flashModeCB.setChecked(true);
-                            settings.preferences.flashMode = true;
-                            enabledFlashDuringEvents = true;
-                        }
-                    }
+                    selectSkin(skinName);
+                    trayManager.SetCurrentSkinIndex(getSkinIndex(skinOptions, skinName));
                 }
                 dirtyRectCB.handleEvent(*event, mousePos, *window);
                 settings.preferences.showDirtyRects = dirtyRectCB.isChecked();
@@ -456,64 +485,6 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
             skinDropdown.update(mousePos, *window);
             flashDriveInput.update(mousePos, *window);
 
-            static bool lastFlashModeChecked = settings.preferences.flashMode;
-            if (enabledFlashDuringEvents) {
-                lastFlashModeChecked = true;
-            }
-            // Disable flash mode checkbox if skin doesn't support it
-            if (skins[skinName]->initialized && !skins[skinName]->hasFlashConfig()) {
-                flashModeCB.setChecked(false);
-                flashModeCB.setDisabled(true);
-                settings.preferences.flashMode = false;
-                if (lastFlashModeChecked) {
-                    lastFlashModeChecked = false;
-                    LOG_INFO << "Skin does not support flash mode. Disabling flash mode.\n";
-                }
-            } else {
-                flashModeCB.setDisabled(false);
-
-                // Handle flash mode checkbox - controls ENABLED file on device
-                if (flashModeCB.isChecked() != lastFlashModeChecked) {
-                    flash::AnimeSkinFlashExporter exporter(settings.network.espDrive);
-
-                    if (flashModeCB.isChecked()) {
-                        // Trying to enable - check if flashable and enable
-                        LOG_INFO << "Attempting to enable flash mode...\n";
-                        if (exporter.isFlashable()) {
-                            if (exporter.enableFlashMode()) {
-                                settings.preferences.flashMode = true;
-                                LOG_INFO << "Flash mode enabled successfully.\n";
-                                flashExportStatus = "Flash mode enabled";
-                            } else {
-                                flashModeCB.setChecked(false);
-                                LOG_ERROR << "Failed to enable flash mode on device.\n";
-                                flashExportStatus = "Failed to enable flash mode";
-                            }
-                        } else {
-                            flashModeCB.setChecked(false);
-                            LOG_ERROR << "Device is not flashable. Make sure the FLASHABLE marker file is present on the drive.\n";
-                            flashExportStatus = "Drive not flashable (no FLASHABLE marker)";
-                        }
-                    } else {
-                        // Disabling flash mode
-                        LOG_INFO << "Attempting to disable flash mode...\n";
-                        if (exporter.isFlashable()) {
-                            if (exporter.disableFlashMode()) {
-                                LOG_INFO << "Flash mode disabled successfully.\n";
-                            } else {
-                                LOG_ERROR << "Failed to disable flash mode on device.\n";
-                            }
-                        } else {
-                            LOG_WARN << "Device is not flashable. Make sure the FLASHABLE marker file is present on the drive.\n";
-                        }
-                        settings.preferences.flashMode = false;
-                        flashExportStatus = "Flash mode disabled";
-                    }
-
-                    lastFlashModeChecked = flashModeCB.isChecked();
-                }
-            }
-            
             // Handle flash export button
             if (flashBtn.update(mousePos, mousePressed, *window)) {
                 flash::AnimeSkinFlashExporter exporter(settings.network.espDrive);
@@ -532,10 +503,6 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
                     auto result = exporter.exportSkin(skins[skinName], rotation);
                     if (result.success) {
                         flashExportStatus = "Flash export OK: " + std::to_string(result.exportedFiles.size()) + " files";
-                        // Also enable flash mode checkbox
-                        flashModeCB.setChecked(true);
-                        settings.preferences.flashMode = true;
-                        lastFlashModeChecked = true;
                     } else {
                         flashExportStatus = "Flash export failed: " + result.error;
                     }
@@ -543,7 +510,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
             }
 
             
-            if (refreshBtn.update(mousePos, mousePressed, *window)) {
+            if (refreshBtn.update(mousePos, mousePressed, *window) || trayManager.ShouldRefreshSkin()) {
                 // Force refresh skin parameters
                 for (auto& pair : skins) {
                     if (pair.second->initialized) {
@@ -569,14 +536,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
             // Connect button
             if (connectBtn.update(mousePos, mousePressed, *window)) {
                 if (connected) {
-                    sender.stop();
-                    connection.disconnect();
-                    connected = false;
-                    connectionState = ConnectionState::Disconnected;
-                    statusMsg = "Disconnected";
-                    connectBtn.setLabel("Connect");
-                    connectBtn.setColor(sf::Color(100, 255, 100), sf::Color(150, 255, 150));
-                    statusIndicator.setFillColor(sf::Color::Red);
+                    disconnect();
                 } else if (connectionState == ConnectionState::Disconnected) {
                     attemptConnection();
                     lastConnectAttemptClock.restart();
@@ -614,6 +574,22 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
             attemptConnection();
             firstConnectionAttempt = false;
         }
+        if (trayManager.ShouldConnect()) {
+            attemptConnection();
+        }
+        if (trayManager.ShouldDisconnect()) {
+            disconnect();
+        }
+        int traySkinIndex = trayManager.GetSelectedSkinIndex();
+        if (traySkinIndex != -1 && skins.size() > static_cast<size_t>(traySkinIndex)) {
+            std::string traySelectedSkin = skinOptions[traySkinIndex];
+            if (traySelectedSkin != skinName) {
+                LOG_INFO << "Skin change from system tray menu: " << traySelectedSkin << "\n";
+                selectSkin(traySelectedSkin);
+                skinDropdown.setSelectedIndex(traySkinIndex);
+                trayManager.SetCurrentSkinIndex(traySkinIndex);
+            }
+        }
         
         // Check async connection result
         if (connectionState == ConnectionState::Connecting) {
@@ -637,6 +613,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
                     statusIndicator.setFillColor(sf::Color::Green);
                     sender.start(&connection);
                     frameLock.reset();  // Reset frame lock timing on new connection
+                    pendingModeSync = true; // We want to sync mode selection after connecting
                 } else {
                     connectionState = ConnectionState::Disconnected;
                     statusMsg = "Connection timed out";
@@ -646,9 +623,44 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
                 }
             }
         }
+        trayManager.SetConnectionState(connectionState);
 
         if (connected) {
             firstConnectionAttempt = true; // Allow immediate reconnect after a successful connection
+        }
+
+        // Handle pending mode sync
+        if (pendingModeSync && connected) {
+            if (!syncModeToDevice()) {
+                flashExportStatus = "Failed to sync mode to device";
+            }
+            pendingModeSync = false;
+        }
+
+        // Disable flash mode checkbox if skin doesn't support it
+        if (skins[skinName]->initialized && !skins[skinName]->hasFlashConfig()) {
+            if (settings.preferences.flashMode) {
+                flashModeCB.setChecked(false, true);
+                flashModeCB.setDisabled(true);
+                LOG_INFO << "Skin does not support flash mode. Disabling flash mode.\n";
+            }
+            settings.preferences.flashMode = false;
+        } else {
+            flashModeCB.setDisabled(false);
+        }
+
+        // Handle flash mode checkbox
+        if (flashModeCB.wasJustUpdated()) {
+            if (connected) {
+                if (!syncModeToDevice()) {
+                    // Revert checkbox on failure
+                    flashModeCB.setChecked(!settings.preferences.flashMode);
+                    settings.preferences.flashMode = !settings.preferences.flashMode;
+                    flashExportStatus = "Failed to sync mode to device";
+                }
+            } else {
+                LOG_INFO << "Flash mode changed to " << (flashModeCB.isChecked() ? "enabled" : "disabled") << " but not connected, so deferring sync\n";
+            }
         }
 
         // Update frame lock controller

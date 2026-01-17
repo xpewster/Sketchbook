@@ -6,6 +6,20 @@
 #include <condition_variable>
 #include <deque>
 
+// Protocol message types
+namespace protocol {
+    constexpr uint8_t MSG_FULL_FRAME = 0x00;
+    constexpr uint8_t MSG_DIRTY_RECTS = 0x01;
+    constexpr uint8_t MSG_NO_CHANGE = 0x02;
+    constexpr uint8_t MSG_FLASH_DATA = 0x03;
+    constexpr uint8_t MSG_RESET = 0x04;
+    constexpr uint8_t MSG_SET_MODE = 0x05;
+    
+    // Mode constants
+    constexpr uint8_t MODE_FULL_STREAMING = 0x00;
+    constexpr uint8_t MODE_FLASH = 0x01;
+}
+
 // Threaded frame sender with frame lock support
 class FrameSender {
 public:
@@ -77,8 +91,30 @@ public:
 
     bool sendReset() {
         if (!connection_) return false;
-        uint8_t cmd = 0x04;
+        uint8_t cmd = protocol::MSG_RESET;
         return connection_->sendPacket(&cmd, 1);
+    }
+    
+    // Send mode selection to remote
+    // Returns true if mode was sent and ACKed successfully
+    bool sendModeSelection(bool flashMode) {
+        if (!connection_) return false;
+        
+        uint8_t packet[2] = {
+            protocol::MSG_SET_MODE,
+            flashMode ? protocol::MODE_FLASH : protocol::MODE_FULL_STREAMING
+        };
+        
+        if (!connection_->sendPacket(packet, 2)) {
+            return false;
+        }
+        
+        // Wait for ACK
+        return connection_->waitForAck(5000);
+    }
+
+    void invalidateDirtyTracker() {
+        dirtyTracker_.invalidate();
     }
     
     // Get current FPS (thread-safe)
