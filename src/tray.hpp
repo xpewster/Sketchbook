@@ -17,7 +17,8 @@ enum TrayMenuID {
     MENU_OPEN = 1,
     MENU_CONNECT = 2,
     MENU_REFRESH_SKIN = 3,
-    MENU_CLOSE = 4,
+    MENU_RESET_BOARD = 4,
+    MENU_CLOSE = 5,
     MENU_SKIN_BASE = 100  // Skin submenu items start at 100
 };
 
@@ -35,6 +36,7 @@ private:
     std::atomic<bool> shouldConnect;
     std::atomic<bool> shouldDisconnect;
     std::atomic<bool> shouldRefreshSkin;
+    std::atomic<bool> shouldResetBoard;
     std::atomic<int> selectedSkinIndex;  // -1 means no selection
     std::atomic<bool> running;
     
@@ -103,6 +105,8 @@ private:
             // Do nothing if Connecting
         } else if (cmd == MENU_REFRESH_SKIN) {
             shouldRefreshSkin = true;
+        } else if (cmd == MENU_RESET_BOARD) {
+            shouldResetBoard = true;
         } else if (cmd == MENU_CLOSE) {
             shouldExit = true;
         } else if (cmd >= MENU_SKIN_BASE) {
@@ -228,6 +232,7 @@ private:
         AppendMenuW(hMenu, MF_STRING | MF_POPUP, (UINT_PTR)hSkinMenu, L"Change skin");
         AppendMenuW(hMenu, MF_STRING, MENU_REFRESH_SKIN, L"Refresh skin");
         AppendMenuW(hMenu, MF_SEPARATOR, 0, NULL);
+        AppendMenuW(hMenu, MF_STRING, MENU_RESET_BOARD, L"Reset board");
         AppendMenuW(hMenu, MF_STRING, MENU_CLOSE, L"Close");
         
         running = true;
@@ -251,7 +256,7 @@ public:
     TrayManager(HWND sfmlWindow) 
         : mainHwnd(sfmlWindow), trayHwnd(NULL), hMenu(NULL), hSkinMenu(NULL),
           shouldRestore(false), shouldExit(false), shouldConnect(false),
-          shouldDisconnect(false), shouldRefreshSkin(false), selectedSkinIndex(-1),
+          shouldDisconnect(false), shouldRefreshSkin(false), shouldResetBoard(false), selectedSkinIndex(-1),
           running(false), connectionState(ConnectionState::Disconnected),
           currentSkinIndex(-1) {
         
@@ -317,6 +322,10 @@ public:
     bool ShouldRefreshSkin() {
         return shouldRefreshSkin.exchange(false);
     }
+
+    bool ShouldResetBoard() {
+        return shouldResetBoard.exchange(false);
+    }
     
     int GetSelectedSkinIndex() {
         return selectedSkinIndex.exchange(-1);
@@ -357,5 +366,38 @@ public:
     // Used for lazy initialization of TrayManager before we have the SFML window handle
     void UpdateMainWindowHandle(HWND newHwnd) {
         mainHwnd = newHwnd;
+    }
+
+    // Display a tray notification balloon
+    // iconType: NIIF_INFO, NIIF_WARNING, NIIF_ERROR, or NIIF_USER (uses app icon)
+    void ShowNotification(const std::wstring& title, const std::wstring& message, DWORD iconType = NIIF_INFO) {
+        if (!trayHwnd) return;
+        
+        NOTIFYICONDATA nidBalloon = nid;
+        nidBalloon.uFlags |= NIF_INFO;
+        nidBalloon.dwInfoFlags = iconType;
+        
+        // Use the app icon for NIIF_USER
+        if (iconType == NIIF_USER) {
+            nidBalloon.dwInfoFlags |= NIIF_LARGE_ICON;
+        }
+        
+        // Copy title (max 63 chars)
+        wcsncpy_s(nidBalloon.szInfoTitle, title.c_str(), _TRUNCATE);
+        
+        // Copy message (max 255 chars)
+        wcsncpy_s(nidBalloon.szInfo, message.c_str(), _TRUNCATE);
+        
+        Shell_NotifyIcon(NIM_MODIFY, &nidBalloon);
+    }
+    
+    void ShowNotification(const std::string& title, const std::string& message, DWORD iconType = NIIF_INFO) {
+        auto toWide = [](const std::string& str) {
+            int wideLen = MultiByteToWideChar(CP_UTF8, 0, str.c_str(), -1, NULL, 0);
+            std::wstring wide(wideLen - 1, 0);
+            MultiByteToWideChar(CP_UTF8, 0, str.c_str(), -1, &wide[0], wideLen);
+            return wide;
+        };
+        ShowNotification(toWide(title), toWide(message), iconType);
     }
 };

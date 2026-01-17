@@ -403,6 +403,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
             while (const std::optional<sf::Event> event = window->pollEvent()) {
                 if (event->is<sf::Event::Closed>()) {
                     if (settings.preferences.closeToTray) {
+                        trayManager.ShowNotification("Minimized to tray", "You've put away Sketchbook for now. It will continue running in the background.", NIIF_USER);
                         trayManager.MinimizeToTray();
                     } else {
                         window->close();
@@ -519,7 +520,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
                 }
             }
 
-            if (resetBoardSettingsBtn.update(mousePos, mousePressed, *window)) {
+            if (resetBoardSettingsBtn.update(mousePos, mousePressed, *window) || trayManager.ShouldResetBoard()) {
                 if (connected) {
                     LOG_INFO << "Resetting board...\n";
                     if (sender.sendReset()) {
@@ -529,6 +530,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
                         statusMsg = "Failed to send reset command";
                     }
                 } else {
+                    LOG_WARN << "Cannot reset board - not connected\n";
+                    trayManager.ShowNotification("Cannot reset board", "Sketchbook must be connected to the remote board to reset it.", NIIF_WARNING);
                     statusMsg = "Not connected - cannot reset board";
                 }
             }

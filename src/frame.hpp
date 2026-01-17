@@ -20,6 +20,8 @@ namespace protocol {
     constexpr uint8_t MODE_FLASH = 0x01;
 }
 
+constexpr int TIMEOUT_ACK = 20000; // ms
+
 // Threaded frame sender with frame lock support
 class FrameSender {
 public:
@@ -110,7 +112,7 @@ public:
         }
         
         // Wait for ACK
-        return connection_->waitForAck(5000);
+        return connection_->waitForAck(TIMEOUT_ACK);
     }
 
     void invalidateDirtyTracker() {
@@ -191,7 +193,7 @@ private:
                 
                 if (sendSuccess) {
                     // Wait for ACK from remote
-                    if (connection_->waitForAck(5000)) {
+                    if (connection_->waitForAck(TIMEOUT_ACK)) {
                         recordFrameSent();
                         // Now mark frame as consumed - main thread can queue next
                         {
