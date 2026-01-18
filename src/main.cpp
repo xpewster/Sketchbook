@@ -216,7 +216,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
     Checkbox frameLockCB(400, 8, 12, "Frame lock", font, 4, -2, settings.preferences.frameLock);
     InfoIcon frameLockInfo(485, 8, 15, "resources/Info.png", "When enabled, the sender thread will wait for the remote device to finish processing each frame before progressing the animation. This prevents frame drops at the expense of slower animation.", font);
     Checkbox flashModeCB(400, 24, 12, "Flash mode", font, 4, -2, settings.preferences.flashMode);
-    InfoIcon flashModeInfo(485, 22, 15, "resources/Info.png", "When enabled, the program will only send raw data and selected image streaming to the remote device. The rest of the image will have to be flashed to the remote device along with any relevant config and developed there.", font);
+    InfoIcon flashModeInfo(485, 22, 15, "resources/Info.png", "When enabled, the program will only send raw data and selected image streaming to the remote device. The rest of the image will have to be flashed to the remote device along with any relevant config and developed there. The button below initiates the flash sequence.", font);
     Checkbox dirtyRectCB((float)(windowWidth - 150), (float)(windowHeight - 22), 12, "Show dirty rects", font, 4, -2, settings.preferences.showDirtyRects);
     dirtyRectCB.setLabelColor(sf::Color::White);
     TextInput flashDriveInput(400, 176, 40, 24, settings.network.espDrive, font);
@@ -291,6 +291,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
     sf::Clock lastConnectAttemptClock;
     bool firstConnectionAttempt = true; // Allow immediate first attempt without waiting
     bool pendingModeSync = false; // Track if we need to send mode selection after connection
+    bool pausedAutoConnect = false; // Stops instant reconnects after manual disconnection when AutoConnect is enabled
 
     auto attemptConnection = [&]() {
         connectionState = ConnectionState::Connecting;
@@ -311,9 +312,14 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
             LOG_INFO << "Connection attempt to " << ip << ":" << port << (connectResult ? " succeeded" : " failed") << "\n";
             connectFinished = true;
         });
+
+        if (pausedAutoConnect) {
+            pausedAutoConnect = false; // Unpause for next attempts
+            return;
+        }
     };
 
-    auto disconnect = [&]() {
+    auto disconnect = [&](bool userInitiated = false) {
         sender.stop();
         connection.disconnect();
         connected = false;
@@ -322,6 +328,11 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
         connectBtn.setLabel("Connect");
         connectBtn.setColor(sf::Color(100, 255, 100), sf::Color(150, 255, 150));
         statusIndicator.setFillColor(sf::Color::Red);
+        if (userInitiated && settings.preferences.autoConnect) {
+            statusMsg = "Disconnected. AutoConnect paused.";
+            settings.preferences.autoConnect = false;
+            pausedAutoConnect = true;
+        }
     };
 
     auto selectSkin = [&](const std::string& newSkinName) {
@@ -393,6 +404,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
 
         bool debugFlag = false;
 
+        bool windowInitiatedReset = false;
+        bool windowInitiatedSkinRefresh = false;
         if (window.has_value()) {
 
             // Handle events
@@ -512,34 +525,16 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
 
             
             if (refreshBtn.update(mousePos, mousePressed, *window) || trayManager.ShouldRefreshSkin()) {
-                // Force refresh skin parameters
-                for (auto& pair : skins) {
-                    if (pair.second->initialized) {
-                        pair.second->initialize(pair.second->xmlFilePath);
-                    }
-                }
+                windowInitiatedSkinRefresh = true; // Defer action until outside window loop to allow it to work if window hasn't been created yet
             }
-
             if (resetBoardSettingsBtn.update(mousePos, mousePressed, *window) || trayManager.ShouldResetBoard()) {
-                if (connected) {
-                    LOG_INFO << "Resetting board...\n";
-                    if (sender.sendReset()) {
-                        LOG_INFO << "Reset command sent successfully.\n";
-                    } else {
-                        LOG_ERROR << "Failed to send reset command.\n";
-                        statusMsg = "Failed to send reset command";
-                    }
-                } else {
-                    LOG_WARN << "Cannot reset board - not connected\n";
-                    trayManager.ShowNotification("Cannot reset board", "Sketchbook must be connected to the remote board to reset it.", NIIF_WARNING);
-                    statusMsg = "Not connected - cannot reset board";
-                }
+                windowInitiatedReset = true; // Defer action until outside window loop to allow it to work if window hasn't been created yet
             }
             
             // Connect button
             if (connectBtn.update(mousePos, mousePressed, *window)) {
                 if (connected) {
-                    disconnect();
+                    disconnect(true);
                 } else if (connectionState == ConnectionState::Disconnected) {
                     attemptConnection();
                     lastConnectAttemptClock.restart();
@@ -570,6 +565,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
             connectBtn.setColor(sf::Color(100, 255, 100), sf::Color(150, 255, 150));
             statusIndicator.setFillColor(sf::Color::Red);
             sender.clearError();
+            trayManager.ShowNotification("Connection lost", "Sketchbook has lost connection with it's pencil!", NIIF_USER);
         }
 
         if (settings.preferences.autoConnect && connectionState == ConnectionState::Disconnected && (firstConnectionAttempt || lastConnectAttemptClock.getElapsedTime().asSeconds() > 5.0f)) {
@@ -581,7 +577,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
             attemptConnection();
         }
         if (trayManager.ShouldDisconnect()) {
-            disconnect();
+            disconnect(true);
         }
         int traySkinIndex = trayManager.GetSelectedSkinIndex();
         if (traySkinIndex != -1 && skins.size() > static_cast<size_t>(traySkinIndex)) {
@@ -591,6 +587,29 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
                 selectSkin(traySelectedSkin);
                 skinDropdown.setSelectedIndex(traySkinIndex);
                 trayManager.SetCurrentSkinIndex(traySkinIndex);
+            }
+        }
+        if (windowInitiatedSkinRefresh || trayManager.ShouldRefreshSkin()) {
+            // Force refresh skin parameters
+            for (auto& pair : skins) {
+                if (pair.second->initialized) {
+                    pair.second->initialize(pair.second->xmlFilePath);
+                }
+            }
+        }
+        if (windowInitiatedReset || trayManager.ShouldResetBoard()) {
+            if (connected) {
+                LOG_INFO << "Resetting board...\n";
+                if (sender.sendReset()) {
+                    LOG_INFO << "Reset command sent successfully.\n";
+                } else {
+                    LOG_ERROR << "Failed to send reset command.\n";
+                    statusMsg = "Failed to send reset command";
+                }
+            } else {
+                LOG_WARN << "Cannot reset board - not connected\n";
+                trayManager.ShowNotification("Cannot reset board", "Sketchbook must be connected to the remote board to reset it.", NIIF_WARNING);
+                statusMsg = "Not connected - cannot reset board";
             }
         }
         
@@ -915,6 +934,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
         }
     }
 
+    if (pausedAutoConnect) {
+        settings.preferences.autoConnect = true; // Re-enable AutoConnect if we paused it for manual disconnect
+    }
     settings.save();
     
     // Clean shutdown
