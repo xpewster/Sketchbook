@@ -139,26 +139,47 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
     // Dynamically load skins from skins/ folder
     namespace fs = std::filesystem;
     std::string skinsPath = "skins/";
+    std::vector<std::string> skinOptions;
+    int defaultSkinIndex = 0;
 
-    if (fs::exists(skinsPath) && fs::is_directory(skinsPath)) {
-        for (const auto& entry : fs::directory_iterator(skinsPath)) {
-            if (entry.is_directory()) {
-                std::string folderName = entry.path().filename().string();
-                std::string skinXmlPath = entry.path().string() + "/skin.xml";
-                
-                if (fs::exists(skinXmlPath)) {
-                    auto skin = std::make_unique<AnimeSkin>(folderName, qualia::DISPLAY_HEIGHT, qualia::DISPLAY_WIDTH);
-                    skins[folderName] = skin.get();
-                    animeSkins.push_back(std::move(skin));
-                    LOG_INFO << "Loaded skin: " << folderName << "\n";
-                } else {
-                    LOG_WARN << "Skipping folder '" << folderName << "' - no skin.xml found\n";
+    auto loadSkins = [&]() {
+        if (fs::exists(skinsPath) && fs::is_directory(skinsPath)) {
+            for (const auto& entry : fs::directory_iterator(skinsPath)) {
+                if (entry.is_directory()) {
+                    std::string folderName = entry.path().filename().string();
+                    std::string skinXmlPath = entry.path().string() + "/skin.xml";
+                    
+                    if (fs::exists(skinXmlPath) && skins.find(folderName) == skins.end()) {
+                        auto skin = std::make_unique<AnimeSkin>(folderName, qualia::DISPLAY_HEIGHT, qualia::DISPLAY_WIDTH);
+                        skins[folderName] = skin.get();
+                        animeSkins.push_back(std::move(skin));
+                        LOG_INFO << "Loaded skin: " << folderName << "\n";
+                    } else {
+                        LOG_WARN << "Skipping folder '" << folderName << "' - no skin.xml found or skin already loaded\n";
+                    }
                 }
             }
+        } else {
+            LOG_WARN << "Skins directory not found: " << skinsPath << "\n";
         }
-    } else {
-        LOG_WARN << "Skins directory not found: " << skinsPath << "\n";
-    }
+        
+        skinOptions.clear();
+        for (const auto& pair : skins) {
+            skinOptions.push_back(pair.first);
+        }
+        defaultSkinIndex = getSkinIndex(skinOptions, skinName);
+        if (defaultSkinIndex == -1) {
+            LOG_WARN << "Selected skin '" << skinName << "' not found. Defaulting to first available skin.\n";
+            defaultSkinIndex = 0;
+            skinName = skinOptions[0];
+        }
+        if (!(skins[skinName]->initialized)) {
+            skins[skinName]->initialize(skinsPath + skinName + "/skin.xml"); // Initialize the selected skin
+        }
+        trayManager.SetSkinList(skinOptions, defaultSkinIndex);
+    };
+    loadSkins();
+
     if (settings.preferences.flashMode) {
         LOG_INFO << "Flash enabled for drive " << settings.network.espDrive << "\n";
     }
@@ -196,18 +217,6 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
     TextInput ipInput(10, 8, 120, 24, settings.network.espIP, font);
     Button connectBtn(140, 8, 90, 24, "Connect", font);
     connectBtn.setColor(sf::Color(100, 255, 100), sf::Color(150, 255, 150));
-    std::vector<std::string> skinOptions;
-    for (const auto& pair : skins) {
-        skinOptions.push_back(pair.first);
-    }
-    int defaultSkinIndex = getSkinIndex(skinOptions, skinName);
-    if (defaultSkinIndex == -1) {
-        LOG_WARN << "Selected skin '" << skinName << "' not found. Defaulting to first available skin.\n";
-        defaultSkinIndex = 0;
-        skinName = skinOptions[0];
-    }
-    skins[skinName]->initialize(skinsPath + skinName + "/skin.xml"); // Initialize the selected skin
-    trayManager.SetSkinList(skinOptions, defaultSkinIndex); // Only happens once for now
     DropdownSelector skinDropdown(240, 8, 120, 24, skinOptions, font, defaultSkinIndex);
     Button refreshBtn(370, 8, 24, 24, "", font);
     sf::Texture refreshIconTexture;
@@ -219,8 +228,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
     InfoIcon flashModeInfo(485, 22, 15, "resources/Info.png", "When enabled, the program will only send raw data and selected image streaming to the remote device. The rest of the image will have to be flashed to the remote device along with any relevant config and developed there. The button below initiates the flash sequence.", font);
     Checkbox dirtyRectCB((float)(windowWidth - 150), (float)(windowHeight - 22), 12, "Show dirty rects", font, 4, -2, settings.preferences.showDirtyRects);
     dirtyRectCB.setLabelColor(sf::Color::White);
-    TextInput flashDriveInput(400, 176, 40, 24, settings.network.espDrive, font);
-    Button flashBtn(450, 176, 90, 24, "MemFlash", font);
+    TextInput flashDriveInput(400, 192, 40, 24, settings.network.espDrive, font);
+    Button flashBtn(450, 192, 90, 24, "MemFlash", font);
     flashBtn.setColor(sf::Color(0, 64, 255), sf::Color(54, 99, 235));
     flashBtn.setLabelColor(sf::Color::White);
     flashModeInfo.setExtraHeight(30);
@@ -596,6 +605,10 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
                     pair.second->initialize(pair.second->xmlFilePath);
                 }
             }
+            // Also refresh skin optionss in case new skins were added
+            loadSkins();
+            skinDropdown.setOptions(skinOptions);
+            skinDropdown.setSelectedIndex(defaultSkinIndex); // Reuse defaultSkinIndex (updated in lambda)
         }
         if (windowInitiatedReset || trayManager.ShouldResetBoard()) {
             if (connected) {

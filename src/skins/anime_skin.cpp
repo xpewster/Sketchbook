@@ -48,6 +48,7 @@
     
     Hardware monitor:
     - "skin.hwmon.text.fontindex": Index of font to use for hwmon text
+    - "skin.hwmon.cpu.usage.header": Header text for CPU usage
     - "skin.hwmon.cpu.usage.text.x": X position of CPU usage text
     - "skin.hwmon.cpu.usage.text.y": Y position of CPU usage text
     - "skin.hwmon.cpu.usage.text.color": Color of CPU usage text (hex RGB)
@@ -57,6 +58,7 @@
     - "skin.hwmon.cpu.usage.icon.y": Y position of CPU usage icon
     - "skin.hwmon.cpu.usage.icon.width": Width of CPU usage icon
     - "skin.hwmon.cpu.usage.icon.height": Height of CPU usage icon
+    - "skin.hwmon.cpu.temp.header": Header text for CPU temperature
     - "skin.hwmon.cpu.temp.text.x": X position of CPU temperature text
     - "skin.hwmon.cpu.temp.text.y": Y position of CPU temperature text
     - "skin.hwmon.cpu.temp.text.color": Color of CPU temperature text (hex RGB)
@@ -69,6 +71,7 @@
     - "skin.hwmon.cpu.combine": Whether to combine CPU usage and temperature into one line
     - "skin.hwmon.cpu.combinedivider": Separator string between usage and temp when combined
     - "skin.hwmon.cpu.pincombinedivider": Pin the position of the combined divider as much as possible (true/false)
+    - "skin.hwmon.mem.usage.header": Header text for memory usage
     - "skin.hwmon.mem.usage.text.x": X position of memory usage text
     - "skin.hwmon.mem.usage.text.y": Y position of memory usage text
     - "skin.hwmon.mem.usage.text.color": Color of memory usage text (hex RGB)
@@ -78,10 +81,12 @@
     - "skin.hwmon.mem.usage.icon.y": Y position of memory usage icon
     - "skin.hwmon.mem.usage.icon.width": Width of memory usage icon
     - "skin.hwmon.mem.usage.icon.height": Height of memory usage icon
+    - "skin.hwmon.train.next.header": Header text for next train arrival
     - "skin.hwmon.train.next.text.x": X position of next train text
     - "skin.hwmon.train.next.text.y": Y position of next train text
     - "skin.hwmon.train.next.text.color": Color of next train text (hex RGB)
     - "skin.hwmon.train.next.text.size": Font size of next train text
+    - "skin.hwmon.train.next.text.divider": Divider string between train line and arrival time
     - "skin.hwmon.train.next.icon.path": Path to next train icon
     - "skin.hwmon.train.next.icon.x": X position of next train icon
     - "skin.hwmon.train.next.icon.y": Y position of next train icon
@@ -201,8 +206,10 @@ private:
     unsigned int weatherTextSize = 14;
     bool hasWeatherText = false;
 
-    // Hardware monitor - CPU usage
+    // Hardware monitor
     int hwmonTextFontIndex = 0;
+    // Hardware monitor - CPU usage
+    std::string cpuUsageHeader = "CPU: ";
     float cpuUsageTextX = 0;
     float cpuUsageTextY = 0;
     sf::Color cpuUsageTextColor = sf::Color::White;
@@ -216,6 +223,7 @@ private:
     float cpuUsageIconHeight = 32;
 
     // Hardware monitor - CPU temp
+    std::string cpuTempHeader = "Temp: ";
     float cpuTempTextX = 0;
     float cpuTempTextY = 0;
     sf::Color cpuTempTextColor = sf::Color::White;
@@ -226,12 +234,14 @@ private:
     bool cpuCombine = false;
     std::string cpuCombinedDivider = " @ ";
     bool cpuPinCombinedDivider = false;
+    float cpuCombinedFixedTextWidth = 0; // Calculated width of combined text for pinning divider
     float cpuTempIconX = 0;
     float cpuTempIconY = 0;
     float cpuTempIconWidth = 32;
     float cpuTempIconHeight = 32;
 
     // Hardware monitor - Memory usage
+    std::string memUsageHeader = "Mem: ";
     float memUsageTextX = 0;
     float memUsageTextY = 0;
     sf::Color memUsageTextColor = sf::Color::White;
@@ -245,10 +255,12 @@ private:
     float memUsageIconHeight = 32;
 
     // Hardware monitor - Train
+    std::string trainNextHeader = "Next Train: ";
     float trainNextTextX = 0;
     float trainNextTextY = 0;
     sf::Color trainNextTextColor = sf::Color::White;
     unsigned int trainNextTextSize = 14;
+    std::string trainNextTextDivider = " | ";
     sf::Texture trainNextIcon;
     bool hasTrainNextIcon = false;
     bool hasTrainNextText = false;
@@ -645,6 +657,7 @@ private:
         std::string iconPath;
         
         // CPU usage
+        cpuUsageHeader = getParam("skin.hwmon.cpu.usage.header", "CPU: ");
         cpuUsageTextX = getParamFloat("skin.hwmon.cpu.usage.text.x", 0);
         cpuUsageTextY = getParamFloat("skin.hwmon.cpu.usage.text.y", 0);
         cpuUsageTextColor = getParamColor("skin.hwmon.cpu.usage.text.color", sf::Color::White);
@@ -659,6 +672,7 @@ private:
         cpuUsageIconHeight = getParamFloat("skin.hwmon.cpu.usage.icon.height", 32);
 
         // CPU temp
+        cpuTempHeader = getParam("skin.hwmon.cpu.temp.header", "Temp: ");
         cpuTempTextX = getParamFloat("skin.hwmon.cpu.temp.text.x", 0);
         cpuTempTextY = getParamFloat("skin.hwmon.cpu.temp.text.y", 0);
         cpuTempTextColor = getParamColor("skin.hwmon.cpu.temp.text.color", sf::Color::White);
@@ -667,6 +681,16 @@ private:
         cpuCombine = getParamBool("skin.hwmon.cpu.combine", false);
         cpuCombinedDivider = getParamString("skin.hwmon.cpu.combinedivider", " @ ");
         cpuPinCombinedDivider = getParamBool("skin.hwmon.cpu.pincombinedivider", false);
+        // Calculate combined text width if needed for pinning divider
+        if (cpuCombine && cpuPinCombinedDivider && hasCpuUsageText) {
+            // Calculate the width of each glyph
+            cpuCombinedFixedTextWidth = 0;
+            sf::Font* hwmonFont = getFont(hwmonTextFontIndex);
+            for (char c : cpuUsageHeader) {
+                sf::Glyph glyph = hwmonFont->getGlyph(c, cpuUsageTextSize, false);
+                cpuCombinedFixedTextWidth += glyph.advance;
+            }
+        }
         
         iconPath = getParam("skin.hwmon.cpu.temp.icon.path");
         if (!iconPath.empty()) hasCpuTempIcon = cpuTempIcon.loadFromFile(baseSkinDir + "/" + iconPath);
@@ -676,6 +700,7 @@ private:
         cpuTempIconHeight = getParamFloat("skin.hwmon.cpu.temp.icon.height", 32);
 
         // Memory usage
+        memUsageHeader = getParam("skin.hwmon.mem.usage.header", "Mem: ");
         memUsageTextX = getParamFloat("skin.hwmon.mem.usage.text.x", 0);
         memUsageTextY = getParamFloat("skin.hwmon.mem.usage.text.y", 0);
         memUsageTextColor = getParamColor("skin.hwmon.mem.usage.text.color", sf::Color::White);
@@ -690,10 +715,12 @@ private:
         memUsageIconHeight = getParamFloat("skin.hwmon.mem.usage.icon.height", 32);
 
         // Train
+        trainNextHeader = getParam("skin.hwmon.train.next.header", "Next Train: ");
         trainNextTextX = getParamFloat("skin.hwmon.train.next.text.x", 0);
         trainNextTextY = getParamFloat("skin.hwmon.train.next.text.y", 0);
         trainNextTextColor = getParamColor("skin.hwmon.train.next.text.color", sf::Color::White);
         trainNextTextSize = getParamInt("skin.hwmon.train.next.text.size", 14);
+        trainNextTextDivider = getParamString("skin.hwmon.train.next.text.divider", " | ");
         hasTrainNextText = hasParam("skin.hwmon.train.next.text.x") && hasParam("skin.hwmon.train.next.text.y");
         
         iconPath = getParam("skin.hwmon.train.next.icon.path");
@@ -867,7 +894,7 @@ private:
                 if (cpuCombine) {
                     if (cpuPinCombinedDivider) {
                         // Use 2 separate strings to pin the divider in place and prevent shifting when temp changes
-                        snprintf(cpuStr, sizeof(cpuStr), "CPU: %.0f%%", stats.cpuPercent);
+                        snprintf(cpuStr, sizeof(cpuStr), "%s%.0f%%", cpuUsageHeader.c_str(), stats.cpuPercent);
                         char cpuTempStr[32];
                         snprintf(cpuTempStr, sizeof(cpuTempStr), "%s%.0f\u00B0C", cpuCombinedDivider.c_str(), stats.cpuTempC);
                         sf::Text cpuText(*hwmonFont, cpuStr, cpuUsageTextSize);
@@ -875,18 +902,18 @@ private:
                         applyFontStyle(cpuText, hwmonTextFontIndex, &cpuUsageTextColor);
                         texture.draw(cpuText);
                         sf::Text cpuTempText(*hwmonFont, cpuTempStr, cpuUsageTextSize);
-                        float cpuTextWidth = hwmonFont->getGlyph('C', cpuUsageTextSize, false).advance + hwmonFont->getGlyph('P', cpuUsageTextSize, false).advance + hwmonFont->getGlyph('U', cpuUsageTextSize, false).advance + hwmonFont->getGlyph(':', cpuUsageTextSize, false).advance;
-                        cpuTextWidth += hwmonFont->getGlyph(' ', cpuUsageTextSize, false).advance + hwmonFont->getGlyph('%', cpuUsageTextSize, false).advance;
+                        float cpuTextWidth = cpuCombinedFixedTextWidth;
+                        cpuTextWidth += hwmonFont->getGlyph('%', cpuUsageTextSize, false).advance;
                         cpuTextWidth += hwmonFont->getGlyph('2', cpuUsageTextSize, false).advance * (stats.cpuPercent >= 10.0f ? (stats.cpuPercent >= 100.0f ? 3 : 2) : 1); // Account for extra digits if percent > 10 or 100
                         cpuTempText.setPosition(sf::Vector2f(cpuUsageTextX + cpuTextWidth, cpuUsageTextY)); // Position temp text after "CPU: XX%"
                         applyFontStyle(cpuTempText, hwmonTextFontIndex, &cpuUsageTextColor);
                         texture.draw(cpuTempText);
                         goto Skip;
                     } else {
-                        snprintf(cpuStr, sizeof(cpuStr), "CPU: %.0f%%%s%.0f\u00B0C", stats.cpuPercent, cpuCombinedDivider.c_str(), stats.cpuTempC);
+                        snprintf(cpuStr, sizeof(cpuStr), "%s%.0f%%%s%.0f\u00B0C", cpuUsageHeader.c_str(), stats.cpuPercent, cpuCombinedDivider.c_str(), stats.cpuTempC);
                     }
                 } else {
-                    snprintf(cpuStr, sizeof(cpuStr), "CPU: %.0f%%", stats.cpuPercent);
+                    snprintf(cpuStr, sizeof(cpuStr), "%s%.0f%%", cpuUsageHeader.c_str(), stats.cpuPercent);
                 }
                 sf::Text cpuText(*hwmonFont, cpuStr, cpuUsageTextSize);
                 cpuText.setPosition(sf::Vector2f(cpuUsageTextX, cpuUsageTextY));
@@ -913,7 +940,7 @@ private:
             sf::Font* hwmonFont = Skin::getFont(hwmonTextFontIndex);
             if (hwmonFont) {
                 char tempStr[64];
-                snprintf(tempStr, sizeof(tempStr), "Temp: %.0f\u00B0C", stats.cpuTempC);
+                snprintf(tempStr, sizeof(tempStr), "%s%.0f\u00B0C", cpuTempHeader.c_str(), stats.cpuTempC);
                 sf::Text tempText(*hwmonFont, tempStr, cpuTempTextSize);
                 tempText.setPosition(sf::Vector2f(cpuTempTextX, cpuTempTextY));
                 applyFontStyle(tempText, hwmonTextFontIndex, &cpuTempTextColor);
@@ -938,7 +965,7 @@ private:
             sf::Font* hwmonFont = Skin::getFont(hwmonTextFontIndex);
             if (hwmonFont) {
                 char memStr[64];
-                snprintf(memStr, sizeof(memStr), "Mem: %.0f%%", stats.memPercent);
+                snprintf(memStr, sizeof(memStr), "%s%.0f%%", memUsageHeader.c_str(), stats.memPercent);
                 sf::Text memText(*hwmonFont, memStr, memUsageTextSize);
                 memText.setPosition(sf::Vector2f(memUsageTextX, memUsageTextY));
                 applyFontStyle(memText, hwmonTextFontIndex, &memUsageTextColor);
@@ -965,7 +992,7 @@ private:
                 char trainStr[128];
                 std::string train0Str = (train.available0 && train.minsToNextTrain0 != 999) ? std::to_string((int)train.minsToNextTrain0) + "m" : "--";
                 std::string train1Str = (train.available1 && train.minsToNextTrain1 != 999) ? std::to_string((int)train.minsToNextTrain1) + "m" : "--";
-                snprintf(trainStr, sizeof(trainStr), "Next Train: %s | %s", train0Str.c_str(), train1Str.c_str());
+                snprintf(trainStr, sizeof(trainStr), "%s%s%s%s", trainNextHeader.c_str(), train0Str.c_str(), trainNextTextDivider.c_str(), train1Str.c_str());
                 sf::Text trainText(*hwmonFont, trainStr, trainNextTextSize);
                 trainText.setPosition(sf::Vector2f(trainNextTextX, trainNextTextY));
                 applyFontStyle(trainText, hwmonTextFontIndex, &trainNextTextColor);

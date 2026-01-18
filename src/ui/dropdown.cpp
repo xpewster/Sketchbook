@@ -151,4 +151,16 @@ public:
             displayText.setString(options[selectedIndex]);
         }
     }
+
+    void setOptions(const std::vector<std::string>& opts) {
+        options = opts;
+        if (selectedIndex >= (int)options.size()) {
+            selectedIndex = 0;
+        }
+        if (!options.empty()) {
+            displayText.setString(options[selectedIndex]);
+        } else {
+            displayText.setString("");
+        }
+    }
 };
