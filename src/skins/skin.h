@@ -10,6 +10,7 @@
 #include "../utils/xml.h"
 #include "../weather.hpp"
 #include "../train.hpp"
+#include "../utils/jpegify.hpp"
 
 // Flash mode layer flags
 enum class FlashLayer : uint8_t {
@@ -84,6 +85,9 @@ protected:
     // Temperature thresholds
     float warmTempThreshold = 60.0f;  // Celsius
     float hotTempThreshold = 80.0f;   // Celsius
+
+    // Effects
+    JpegifyEffect jpegifyEffect;
 
     // Helper to determine character temperature state
     CharacterTempState getCharacterTempState(float tempC) const {
@@ -219,6 +223,25 @@ protected:
         }
     }
 
+    void loadEffectsConfig() {
+        // Jpegify effect
+        auto jpegifyEnabledIt = parameters.find("skin.effects.jpegify.enabled");
+        if (jpegifyEnabledIt != parameters.end()) {
+            jpegifyEffect.setEnabled(jpegifyEnabledIt->second == "true" || jpegifyEnabledIt->second == "1");
+        }
+        
+        auto jpegifyQualityIt = parameters.find("skin.effects.jpegify.quality");
+        if (jpegifyQualityIt != parameters.end()) {
+            try { 
+                jpegifyEffect.setQuality(std::stoi(jpegifyQualityIt->second)); 
+            } catch (...) {}
+        }
+        
+        if (jpegifyEffect.isEnabled()) {
+            LOG_INFO << "Jpegify effect enabled, quality=" << jpegifyEffect.getQuality() << "\n";
+        }
+    }
+
 public:
     std::string name;
     std::string xmlFilePath;
@@ -248,6 +271,7 @@ public:
         
         loadFlashConfig();
         loadFonts();
+        loadEffectsConfig();
         parametersRefreshed = true;
         initialized = true;
         return 0;

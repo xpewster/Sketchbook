@@ -68,6 +68,7 @@
     - "skin.hwmon.cpu.temp.icon.height": Height of CPU temperature icon
     - "skin.hwmon.cpu.combine": Whether to combine CPU usage and temperature into one line
     - "skin.hwmon.cpu.combinedivider": Separator string between usage and temp when combined
+    - "skin.hwmon.cpu.pincombinedivider": Pin the position of the combined divider as much as possible (true/false)
     - "skin.hwmon.mem.usage.text.x": X position of memory usage text
     - "skin.hwmon.mem.usage.text.y": Y position of memory usage text
     - "skin.hwmon.mem.usage.text.color": Color of memory usage text (hex RGB)
@@ -86,6 +87,11 @@
     - "skin.hwmon.train.next.icon.y": Y position of next train icon
     - "skin.hwmon.train.next.icon.width": Width of next train icon
     - "skin.hwmon.train.next.icon.height": Height of next train icon
+
+    Effects
+    - "skin.effects.jpegify.enabled": Enable JPEG compression effect on the whole texture (true/false)
+    - "skin.effects.jpegify.quality": Quality level for JPEG compression (0-100, default 30)
+    - "skin.effects.jpegify.loadinggif": Whether to apply jpegify effect to the loading gif in flash mode (true/false)
     
     Fonts:
     - "skin.fonts.font[id=0].ttf": Path to first font TTF file (corresponding PCF should exist with same name)
@@ -101,6 +107,7 @@
     - "skin.flash.character": Enable flashing character layer (true/false)
     - "skin.flash.weather_icon": Enable flashing weather icon layer (true/false)
     - "skin.flash.text": Enable flashing text layer (true/false)
+    - "skin.flash.loading": Enable flashing loading gif (true/false)
 */
 
 // Transparent color key for flash mode (magenta in RGB565 = 0xF81F)
@@ -218,6 +225,7 @@ private:
     bool hasCpuTempText = false;
     bool cpuCombine = false;
     std::string cpuCombinedDivider = " @ ";
+    bool cpuPinCombinedDivider = false;
     float cpuTempIconX = 0;
     float cpuTempIconY = 0;
     float cpuTempIconWidth = 32;
@@ -658,6 +666,7 @@ private:
         hasCpuTempText = hasParam("skin.hwmon.cpu.temp.text.x") && hasParam("skin.hwmon.cpu.temp.text.y");
         cpuCombine = getParamBool("skin.hwmon.cpu.combine", false);
         cpuCombinedDivider = getParamString("skin.hwmon.cpu.combinedivider", " @ ");
+        cpuPinCombinedDivider = getParamBool("skin.hwmon.cpu.pincombinedivider", false);
         
         iconPath = getParam("skin.hwmon.cpu.temp.icon.path");
         if (!iconPath.empty()) hasCpuTempIcon = cpuTempIcon.loadFromFile(baseSkinDir + "/" + iconPath);
@@ -856,7 +865,26 @@ private:
             if (hwmonFont) {
                 char cpuStr[64];
                 if (cpuCombine) {
-                    snprintf(cpuStr, sizeof(cpuStr), "CPU: %.0f%%%s%.0f\u00B0C", stats.cpuPercent, cpuCombinedDivider.c_str(), stats.cpuTempC);
+                    if (cpuPinCombinedDivider) {
+                        // Use 2 separate strings to pin the divider in place and prevent shifting when temp changes
+                        snprintf(cpuStr, sizeof(cpuStr), "CPU: %.0f%%", stats.cpuPercent);
+                        char cpuTempStr[32];
+                        snprintf(cpuTempStr, sizeof(cpuTempStr), "%s%.0f\u00B0C", cpuCombinedDivider.c_str(), stats.cpuTempC);
+                        sf::Text cpuText(*hwmonFont, cpuStr, cpuUsageTextSize);
+                        cpuText.setPosition(sf::Vector2f(cpuUsageTextX, cpuUsageTextY));
+                        applyFontStyle(cpuText, hwmonTextFontIndex, &cpuUsageTextColor);
+                        texture.draw(cpuText);
+                        sf::Text cpuTempText(*hwmonFont, cpuTempStr, cpuUsageTextSize);
+                        float cpuTextWidth = hwmonFont->getGlyph('C', cpuUsageTextSize, false).advance + hwmonFont->getGlyph('P', cpuUsageTextSize, false).advance + hwmonFont->getGlyph('U', cpuUsageTextSize, false).advance + hwmonFont->getGlyph(':', cpuUsageTextSize, false).advance;
+                        cpuTextWidth += hwmonFont->getGlyph(' ', cpuUsageTextSize, false).advance + hwmonFont->getGlyph('%', cpuUsageTextSize, false).advance;
+                        cpuTextWidth += hwmonFont->getGlyph('2', cpuUsageTextSize, false).advance * (stats.cpuPercent >= 10.0f ? (stats.cpuPercent >= 100.0f ? 3 : 2) : 1); // Account for extra digits if percent > 10 or 100
+                        cpuTempText.setPosition(sf::Vector2f(cpuUsageTextX + cpuTextWidth, cpuUsageTextY)); // Position temp text after "CPU: XX%"
+                        applyFontStyle(cpuTempText, hwmonTextFontIndex, &cpuUsageTextColor);
+                        texture.draw(cpuTempText);
+                        goto Skip;
+                    } else {
+                        snprintf(cpuStr, sizeof(cpuStr), "CPU: %.0f%%%s%.0f\u00B0C", stats.cpuPercent, cpuCombinedDivider.c_str(), stats.cpuTempC);
+                    }
                 } else {
                     snprintf(cpuStr, sizeof(cpuStr), "CPU: %.0f%%", stats.cpuPercent);
                 }
@@ -866,6 +894,7 @@ private:
                 texture.draw(cpuText);
             }
         }
+        Skip:
 
         // Draw CPU temp icon (only if not combined)
         if (!skipText && hasCpuTempIcon && !cpuCombine) {
@@ -945,6 +974,11 @@ private:
         }
 
         texture.display();
+        
+        // Post-processing
+        if (jpegifyEffect.isEnabled()) {
+            jpegifyEffect.apply(texture);
+        }
     }
 
 public:

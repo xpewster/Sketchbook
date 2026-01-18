@@ -6,6 +6,7 @@
 #include <filesystem>
 #include <iostream>
 #include <cstdint>
+#include "../utils/condition.h"
 
 // Forward declarations
 class Skin;

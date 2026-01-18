@@ -4,11 +4,13 @@
 #include "skins/skin.h"
 #include "image.hpp"
 #include "log.hpp"
+#include "../utils/jpegify.hpp"
 
 #include <SFML/Graphics.hpp>
 #include <unordered_map>
 
 #include "gif.h"
+#include "stb_image.h"
 
 class AnimeSkin; // Forward declaration
 
@@ -32,6 +34,15 @@ public:
         const auto& params = skin->getParameters();
         const std::string& skinDir = skin->getBaseSkinDir();
         
+        // Capture post-processing settings from skin
+        jpegifyEnabled_ = getParamBool(params, "skin.effects.jpegify.enabled", false);
+        jpegifyQuality_ = getParamInt(params, "skin.effects.jpegify.quality", 30);
+        jpegifyLoadingGif_ = getParamBool(params, "skin.effects.jpegify.loadinggif", false);
+        
+        if (jpegifyEnabled_) {
+            LOG_INFO << "Jpegify enabled for flash export, quality=" << jpegifyQuality_ << "\n";
+        }
+        
         // Export each enabled layer
         if (flashConfig.isLayerFlashed(FlashLayer::Background)) {
             if (!exportBackground(skinDir, params, result)) return result;
@@ -47,6 +58,10 @@ public:
         
         if (flashConfig.isLayerFlashed(FlashLayer::Text)) {
             if (!exportFonts(skin, skinDir, result)) return result;
+        }
+        
+        if (getParamBool(params, "skin.flash.loading", false)) {
+            if (!exportLoadingGif(skinDir, result)) return result;
         }
         
         // Generate config file
@@ -96,6 +111,18 @@ private:
     
     // Member to store current rotation setting
     ExportRotation rotation_ = ExportRotation::Rot90;
+    
+    // Post-processing settings
+    bool jpegifyEnabled_ = false;
+    int jpegifyQuality_ = 30;
+    bool jpegifyLoadingGif_ = false;
+    
+    // Apply post-processing effects to an image (jpegify, etc.)
+    void applyPostProcessing(sf::Image& img, bool overrideJpegify = false) {
+        if (jpegifyEnabled_ && !overrideJpegify) {
+            JpegifyEffect::applyToImage(img, jpegifyQuality_);
+        }
+    }
     
     // Transform sprite position from original coordinates to rotated coordinates
     // For a sprite at (x, y) with size (w, h) in original 240x960 skin:
@@ -337,6 +364,36 @@ private:
         return true;
     }
     
+    // Export loading.gif if present in skin directory
+    bool exportLoadingGif(const std::string& skinDir, ExportResult& result) {
+        std::string loadingPath = skinDir + "/loading.gif";
+        
+        if (!std::filesystem::exists(loadingPath)) {
+            LOG_WARN << "Warning: loading.gif not found in skin directory: " << loadingPath << "\n";
+            return false;
+        }
+        
+        std::string outPath = assetDir_ + "loading.gif";
+        
+        // If post-processing is enabled, process the GIF frame by frame
+        if (jpegifyEnabled_) {
+            return processAndExportGif(loadingPath, outPath, result, !jpegifyLoadingGif_);
+        }
+        
+        // Otherwise just copy directly
+        try {
+            std::filesystem::copy_file(loadingPath, outPath,
+                                    std::filesystem::copy_options::overwrite_existing);
+            result.exportedFiles.push_back("loading.gif");
+            result.totalBytes += std::filesystem::file_size(outPath);
+            LOG_INFO << "Copied loading.gif\n";
+            return true;
+        } catch (const std::exception& e) {
+            LOG_WARN << "Warning: Could not copy loading.gif: " << e.what() << "\n";
+            return false;
+        }
+    }
+    
     // Export PNG animation frames to GIF
     bool exportAnimationToGif(const std::string& basePath, int frameCount, float fps,
                               const std::string& outPath, ExportResult& result) {
@@ -352,6 +409,10 @@ private:
         
         // Rotate first frame to get final dimensions
         sf::Image firstFrame = rotateImage(srcFirstFrame);
+        
+        // Apply post-processing to get accurate dimensions
+        applyPostProcessing(firstFrame);
+        
         sf::Vector2u size = firstFrame.getSize();
         int width = size.x;
         int height = size.y;
@@ -377,6 +438,9 @@ private:
             
             // Rotate frame to match display orientation
             sf::Image frame = rotateImage(srcFrame);
+            
+            // Apply post-processing effects
+            applyPostProcessing(frame);
             
             // Convert to RGBA format for gif.h
             const uint8_t* pixels = frame.getPixelsPtr();
@@ -412,6 +476,9 @@ private:
         
         // Apply rotation to match display orientation
         sf::Image img = rotateImage(srcImg);
+        
+        // Apply post-processing effects
+        applyPostProcessing(img);
         
         sf::Vector2u size = img.getSize();
         uint16_t width = static_cast<uint16_t>(size.x);
@@ -453,6 +520,108 @@ private:
         result.exportedFiles.push_back(std::filesystem::path(outPath).filename().string());
         result.totalBytes += std::filesystem::file_size(outPath);
         LOG_INFO << "Created RGB565: " << outPath << " (" << width << "x" << height << ")\n";
+        
+        return true;
+    }
+
+    // Process a GIF file: load frames, apply post-processing, write new GIF
+    bool processAndExportGif(const std::string& inPath, const std::string& outPath,
+                            ExportResult& result, bool overrideJpegify = false) {
+        // Read entire file into memory
+        std::ifstream file(inPath, std::ios::binary | std::ios::ate);
+        if (!file) {
+            LOG_WARN << "Failed to open GIF: " << inPath << "\n";
+            return false;
+        }
+        
+        size_t fileSize = file.tellg();
+        file.seekg(0);
+        std::vector<unsigned char> fileData(fileSize);
+        file.read(reinterpret_cast<char*>(fileData.data()), fileSize);
+        file.close();
+        
+        // Load GIF frames using stb_image
+        int* delays = nullptr;
+        int width, height, frameCount, comp;
+        
+        unsigned char* pixels = stbi_load_gif_from_memory(
+            fileData.data(), static_cast<int>(fileSize),
+            &delays, &width, &height, &frameCount, &comp, 4  // Request RGBA
+        );
+        
+        if (!pixels) {
+            LOG_WARN << "Failed to decode GIF: " << inPath << "\n";
+            return false;
+        }
+        
+        // Calculate average delay for GIF writer (gif.h uses centiseconds)
+        int avgDelay = 10;  // Default 100ms
+        if (delays && frameCount > 0) {
+            int totalDelay = 0;
+            for (int i = 0; i < frameCount; i++) {
+                totalDelay += delays[i];
+            }
+            avgDelay = (totalDelay / frameCount) / 10;  // Convert ms to centiseconds
+            if (avgDelay < 1) avgDelay = 1;
+        }
+        
+        // Initialize GIF writer
+        GifWriter writer;
+        if (!GifBegin(&writer, outPath.c_str(), width, height, avgDelay)) {
+            stbi_image_free(pixels);
+            if (delays) stbi_image_free(delays);
+            LOG_WARN << "Failed to create output GIF: " << outPath << "\n";
+            return false;
+        }
+        
+        // Process each frame
+        size_t frameSize = width * height * 4;
+        std::vector<uint8_t> frameBuffer(frameSize);
+        
+        for (int i = 0; i < frameCount; i++) {
+            // Create sf::Image from frame data
+            sf::Image frame(sf::Vector2u(width, height));
+            const unsigned char* framePixels = pixels + (i * frameSize);
+            
+            for (int y = 0; y < height; y++) {
+                for (int x = 0; x < width; x++) {
+                    int idx = (y * width + x) * 4;
+                    frame.setPixel(sf::Vector2u(x, y), sf::Color(
+                        framePixels[idx],
+                        framePixels[idx + 1],
+                        framePixels[idx + 2],
+                        framePixels[idx + 3]
+                    ));
+                }
+            }
+            
+            // Apply post-processing (jpegify, etc.)
+            applyPostProcessing(frame, overrideJpegify);
+            
+            // Get processed pixels and write frame
+            const uint8_t* processedPixels = frame.getPixelsPtr();
+            memcpy(frameBuffer.data(), processedPixels, frameSize);
+            
+            // Use per-frame delay if available, otherwise average
+            int frameDelay = (delays && delays[i] > 0) ? (delays[i] / 10) : avgDelay;
+            if (frameDelay < 1) frameDelay = 1;
+            
+            if (!GifWriteFrame(&writer, frameBuffer.data(), width, height, frameDelay)) {
+                GifEnd(&writer);
+                stbi_image_free(pixels);
+                if (delays) stbi_image_free(delays);
+                LOG_WARN << "Failed to write GIF frame " << i << "\n";
+                return false;
+            }
+        }
+        
+        GifEnd(&writer);
+        stbi_image_free(pixels);
+        if (delays) stbi_image_free(delays);
+        
+        result.exportedFiles.push_back(std::filesystem::path(outPath).filename().string());
+        result.totalBytes += std::filesystem::file_size(outPath);
+        LOG_INFO << "Processed GIF: " << outPath << " (" << frameCount << " frames)\n";
         
         return true;
     }

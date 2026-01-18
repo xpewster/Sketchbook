@@ -3,7 +3,15 @@ project(CMakeSFMLProject LANGUAGES CXX)
 
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 
+if(NOT CMAKE_BUILD_TYPE)
+  set(CMAKE_BUILD_TYPE Release)
+endif()
+
+set(CMAKE_CXX_FLAGS_RELEASE "/O2")
+
 include(FetchContent)
+
+set(JPEG_TURBO_DIR "C:/libjpeg-turbo64")
 
 # SFML
 FetchContent_Declare(SFML
@@ -43,6 +51,7 @@ FetchContent_MakeAvailable(tomlplusplus)
 
 add_executable(Sketchbook WIN32 src/main.cpp src/image.hpp resources/app.rc)
 target_compile_features(Sketchbook PRIVATE cxx_std_20)
+target_include_directories(Sketchbook PRIVATE ${JPEG_TURBO_DIR}/include)
 target_include_directories(Sketchbook PRIVATE ${CMAKE_SOURCE_DIR}/include)
 target_link_libraries(Sketchbook PRIVATE 
     SFML::Graphics
@@ -51,7 +60,8 @@ target_link_libraries(Sketchbook PRIVATE
     pdh.lib 
     ws2_32.lib
     tinyxml2::tinyxml2
-    ${CMAKE_SOURCE_DIR}/libs/lhwm-cpp-wrapper.lib)
+    ${JPEG_TURBO_DIR}/lib/turbojpeg-static.lib
+)
 
 # set_target_properties(Sketchbook PROPERTIES WIN32_EXECUTABLE TRUE) # Set to false for debugging console output
 set_target_properties(Sketchbook PROPERTIES LINK_FLAGS "/MANIFESTUAC:\"level='requireAdministrator' uiAccess='false'\"")
