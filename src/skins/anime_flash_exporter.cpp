@@ -81,6 +81,20 @@ private:
         auto it = params.find(key);
         return (it != params.end()) ? it->second : defaultVal;
     }
+
+    std::string getParamFilename(const std::unordered_map<std::string, std::string>& params,
+                                 const std::string& key, const std::string& skinDir, const std::string& defaultVal = "") {
+        auto it = params.find(key);
+        std::string filename;
+        if (it != params.end() && !it->second.empty()) {
+            filename = it->second;
+        }
+        // Check if filename is a valid file in skin directory
+        if (!filename.empty() && std::filesystem::exists(skinDir + "/" + filename)) {
+            return filename;
+        }
+        return defaultVal;
+    }
     
     float getParamFloat(const std::unordered_map<std::string, std::string>& params,
                         const std::string& key, float defaultVal = 0.0f) {
@@ -196,7 +210,7 @@ private:
         bool animated = getParamBool(params, "skin.background.animation.enabled", false);
         int frameCount = getParamInt(params, "skin.background.animation.framecount", 1);
         float fps = getParamFloat(params, "skin.background.animation.speed", 1.0f);
-        std::string bgFile = getParam(params, "skin.background.png");
+        std::string bgFile = getParamFilename(params, "skin.background.png", skinDir);
         
         if (bgFile.empty()) return true;  // No background configured
         
@@ -224,7 +238,7 @@ private:
                          const std::unordered_map<std::string, std::string>& params,
                          ExportResult& result) {
         // Normal state
-        std::string charFile = getParam(params, "skin.character.png");
+        std::string charFile = getParamFilename(params, "skin.character.png", skinDir);
         if (!charFile.empty()) {
             bool animated = getParamBool(params, "skin.character.animation.enabled", false);
             int frameCount = getParamInt(params, "skin.character.animation.framecount", 1);
@@ -243,7 +257,7 @@ private:
         }
         
         // Warm state
-        std::string warmFile = getParam(params, "skin.character.warm.png");
+        std::string warmFile = getParamFilename(params, "skin.character.warm.png", skinDir);
         if (!warmFile.empty()) {
             bool animated = getParamBool(params, "skin.character.warm.animation.enabled", 
                                          getParamBool(params, "skin.character.animation.enabled", false));
@@ -265,7 +279,7 @@ private:
         }
         
         // Hot state
-        std::string hotFile = getParam(params, "skin.character.hot.png");
+        std::string hotFile = getParamFilename(params, "skin.character.hot.png", skinDir);
         if (!hotFile.empty()) {
             bool animated = getParamBool(params, "skin.character.hot.animation.enabled",
                                          getParamBool(params, "skin.character.animation.enabled", false));
@@ -313,7 +327,7 @@ private:
         };
         
         for (int i = 0; i < WEATHER_COUNT; i++) {
-            std::string iconFile = getParam(params, std::string(iconKeys[i]) + ".png");
+            std::string iconFile = getParamFilename(params, std::string(iconKeys[i]) + ".png", skinDir);
             if (iconFile.empty()) continue;
             
             std::string basePath = skinDir + "/" + iconFile;
@@ -376,7 +390,7 @@ private:
         std::string outPath = assetDir_ + "loading.gif";
         
         // If post-processing is enabled, process the GIF frame by frame
-        if (jpegifyEnabled_) {
+        if (jpegifyEnabled_ && jpegifyLoadingGif_) {
             return processAndExportGif(loadingPath, outPath, result, !jpegifyLoadingGif_);
         }
         
@@ -675,8 +689,8 @@ private:
         if (flashConfig.isLayerFlashed(FlashLayer::Character)) {
             bool animated = getParamBool(params, "skin.character.animation.enabled", false);
             int frameCount = getParamInt(params, "skin.character.animation.framecount", 1);
-            bool hasWarm = !getParam(params, "skin.character.warm.png").empty();
-            bool hasHot = !getParam(params, "skin.character.hot.png").empty();
+            bool hasWarm = !getParamFilename(params, "skin.character.warm.png", skin->getBaseSkinDir()).empty();
+            bool hasHot = !getParamFilename(params, "skin.character.hot.png", skin->getBaseSkinDir()).empty();
             
             // Get character image dimensions for proper position transform
             std::string charFile = getParam(params, "skin.character.png");
@@ -716,8 +730,9 @@ private:
         
         // Temperature thresholds
         cfg << "# Temperature thresholds (Celsius)\n";
-        cfg << "temp_warm=" << skin->getWarmTempThreshold() << "\n";
-        cfg << "temp_hot=" << skin->getHotTempThreshold() << "\n\n";
+        cfg << "temp_warm=" << skin->getWarmThreshold() << "\n";
+        cfg << "temp_hot=" << skin->getHotThreshold() << "\n\n";
+        cfg << "thresholds_using_percentage=" << (skin->getThresholdsUsingPercentage() ? "1" : "0") << "\n\n";
         
         // Weather icon config
         if (flashConfig.isLayerFlashed(FlashLayer::WeatherIcon)) {

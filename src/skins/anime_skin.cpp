@@ -24,6 +24,7 @@
     - "skin.character.hot.png": Path to the character image when CPU is hot
     - "skin.character.temp.warm": Temperature threshold for warm state (default 60.0)
     - "skin.character.temp.hot": Temperature threshold for hot state (default 80.0)
+    - "skin.character.temp.usepercentage": Whether to use percentage for temperature thresholds instead of Celsius (true/false)
     
     Weather:
     - "skin.weather.icon.sunny.png": Path to sunny weather icon
@@ -154,6 +155,7 @@ private:
     float characterBobbingSpeed = 1.0f;
     float characterBobbingAmplitude = 5.0f;
     bool hasCharacter = false;
+    bool thresholdsUsingPercentage = false;
 
     // Weather icons - animated frames for each type
     std::vector<sf::Texture> weatherIconSunnyFrames;
@@ -533,6 +535,7 @@ private:
         characterBobbing = getParamBool("skin.character.bobbing.enabled", false);
         characterBobbingSpeed = getParamFloat("skin.character.bobbing.speed", 1.0f);
         characterBobbingAmplitude = getParamFloat("skin.character.bobbing.amplitude", 5.0f);
+        thresholdsUsingPercentage = getParamBool("skin.character.temp.usepercentage", false);
 
         // Load character frames - normal state
         characterAnimated = getParamBool("skin.character.animation.enabled", false);
@@ -805,7 +808,8 @@ private:
         // Draw character
         bool skipCharacter = hasLayer(skipLayers, FlashLayer::Character);
         if (!skipCharacter && hasCharacter) {
-            CharacterTempState tempState = getCharacterTempState(stats.cpuTempC);
+            float measure = thresholdsUsingPercentage ? stats.cpuPercent : stats.cpuTempC;
+            CharacterTempState tempState = getCharacterTempState(measure);
             CharacterFrameInfo charInfo = getCharacterFrameInfo(tempState);
             
             if (charInfo.frames && !charInfo.frames->empty()) {

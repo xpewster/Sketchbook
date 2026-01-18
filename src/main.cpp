@@ -301,8 +301,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
     bool firstConnectionAttempt = true; // Allow immediate first attempt without waiting
     bool pendingModeSync = false; // Track if we need to send mode selection after connection
     bool pausedAutoConnect = false; // Stops instant reconnects after manual disconnection when AutoConnect is enabled
+    bool recentlyLostConnection = false;
 
-    auto attemptConnection = [&]() {
+    auto attemptConnection = [&](bool autoInitiated = false) {
         connectionState = ConnectionState::Connecting;
         connectingIP = ipInput.value;
         connectResult = false;
@@ -324,7 +325,10 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
 
         if (pausedAutoConnect) {
             pausedAutoConnect = false; // Unpause for next attempts
-            return;
+        }
+        if (recentlyLostConnection && autoInitiated) {
+            trayManager.ShowNotification("Reconnected", "Sketchbook was able to find it's pencil all on its own!", NIIF_USER);
+            recentlyLostConnection = false;
         }
     };
 
@@ -527,6 +531,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
                     if (result.success) {
                         flashExportStatus = "Flash export OK: " + std::to_string(result.exportedFiles.size()) + " files";
                     } else {
+                        LOG_WARN << "Flash export failed: " << result.error << "\n";
                         flashExportStatus = "Flash export failed: " + result.error;
                     }
                 }
@@ -575,11 +580,12 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
             statusIndicator.setFillColor(sf::Color::Red);
             sender.clearError();
             trayManager.ShowNotification("Connection lost", "Sketchbook has lost connection with it's pencil!", NIIF_USER);
+            recentlyLostConnection = true;
         }
 
         if (settings.preferences.autoConnect && connectionState == ConnectionState::Disconnected && (firstConnectionAttempt || lastConnectAttemptClock.getElapsedTime().asSeconds() > 5.0f)) {
             LOG_INFO << "AutoConnecting...\n";
-            attemptConnection();
+            attemptConnection(true);
             firstConnectionAttempt = false;
         }
         if (trayManager.ShouldConnect()) {

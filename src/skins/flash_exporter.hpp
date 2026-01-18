@@ -131,11 +131,20 @@ FlashStatsMessage buildFlashStats(const SystemStats& stats, const WeatherData& w
     msg.weatherIconIndex = getWeatherIconIndex(weather);
     
     msg.flags = 0;
-    if (stats.cpuTempC >= skin->getWarmTempThreshold()) {
-        msg.flags |= FlashStatsMessage::FLAG_CPU_WARM;
-    }
-    if (stats.cpuTempC >= skin->getHotTempThreshold()) {
-        msg.flags |= FlashStatsMessage::FLAG_CPU_HOT;
+    if (skin->getThresholdsUsingPercentage()) {
+        if (stats.cpuPercent >= skin->getWarmThreshold()) {
+            msg.flags |= FlashStatsMessage::FLAG_CPU_WARM;
+        }
+        if (stats.cpuPercent >= skin->getHotThreshold()) {
+            msg.flags |= FlashStatsMessage::FLAG_CPU_HOT;
+        }
+    } else {
+        if (stats.cpuTempC >= skin->getWarmThreshold()) {
+            msg.flags |= FlashStatsMessage::FLAG_CPU_WARM;
+        }
+        if (stats.cpuTempC >= skin->getHotThreshold()) {
+            msg.flags |= FlashStatsMessage::FLAG_CPU_HOT;
+        }
     }
     if (weather.available) {
         msg.flags |= FlashStatsMessage::FLAG_WEATHER_AVAIL;

@@ -83,16 +83,17 @@ protected:
     FlashConfig flashConfig;
     
     // Temperature thresholds
-    float warmTempThreshold = 60.0f;  // Celsius
-    float hotTempThreshold = 80.0f;   // Celsius
+    float warmThreshold = 60.0f;
+    float hotThreshold = 80.0f;
+    bool thresholdsUsingPercentage = false;
 
     // Effects
     JpegifyEffect jpegifyEffect;
 
     // Helper to determine character temperature state
-    CharacterTempState getCharacterTempState(float tempC) const {
-        if (tempC >= hotTempThreshold) return CharacterTempState::Hot;
-        if (tempC >= warmTempThreshold) return CharacterTempState::Warm;
+    CharacterTempState getCharacterTempState(float measure) const {
+        if (measure >= hotThreshold) return CharacterTempState::Hot;
+        if (measure >= warmThreshold) return CharacterTempState::Warm;
         return CharacterTempState::Normal;
     }
     
@@ -215,12 +216,14 @@ protected:
         // Temperature thresholds
         auto warmIt = parameters.find("skin.character.temp.warm");
         if (warmIt != parameters.end()) {
-            try { warmTempThreshold = std::stof(warmIt->second); } catch (...) {}
+            try { warmThreshold = std::stof(warmIt->second); } catch (...) {}
         }
         auto hotIt = parameters.find("skin.character.temp.hot");
         if (hotIt != parameters.end()) {
-            try { hotTempThreshold = std::stof(hotIt->second); } catch (...) {}
+            try { hotThreshold = std::stof(hotIt->second); } catch (...) {}
         }
+        thresholdsUsingPercentage = parameters.find("skin.character.temp.usepercentage") != parameters.end() &&
+                                    (parameters["skin.character.temp.usepercentage"] == "true" || parameters["skin.character.temp.usepercentage"] == "1");
     }
 
     void loadEffectsConfig() {
@@ -333,8 +336,9 @@ public:
     const std::unordered_map<std::string, std::string>& getParameters() const { return parameters; }
     
     // Get temperature thresholds
-    float getWarmTempThreshold() const { return warmTempThreshold; }
-    float getHotTempThreshold() const { return hotTempThreshold; }
+    float getWarmThreshold() const { return warmThreshold; }
+    float getHotThreshold() const { return hotThreshold; }
+    bool getThresholdsUsingPercentage() const { return thresholdsUsingPercentage; }
 
     // Original draw method - uses internal frame counter
     virtual void draw(sf::RenderTexture& texture, SystemStats& stats, WeatherData& weather, TrainData& train) = 0;
