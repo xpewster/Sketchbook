@@ -76,14 +76,6 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
 
     // Initialize startup manager
     StartupManager startupManager(L"Sketchbook");
-    // bool isStartupMinimized = startupManager.IsInStartup() && startupManager.IsStartupMinimized();
-    // if (settings.preferences.startMinimized != isStartupMinimized) {
-    //     LOG_WARN << "Startup minimized setting mismatch. Using windows setting " << isStartupMinimized << "\n";
-    //     settings.preferences.startMinimized = isStartupMinimized;
-    // }
-    if (startupManager.IsInStartup() && startupManager.IsStartupMinimized()) {
-        LOG_WARN << "STARTUP SHORTCUT IS SET TO START MINIMIZED. THIS WILL CAUSE UI ISSUES\n";
-    }
 
     // Initialize main window (lazy creation to avoid window flash on startup)
     const int menuHeight = 40;
@@ -111,7 +103,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
     };
     
     // Only create window immediately if not starting minimized
-    if (!settings.preferences.startMinimized) {
+    if (!(settings.preferences.startMinimized && startupManager.WasLaunchedFromStartup())) {
         LOG_INFO << "Creating main window...\n";
         createWindow();
         LOG_INFO << "Main window created\n";
@@ -323,7 +315,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
             connectFinished = true;
         });
 
-        if (pausedAutoConnect) {
+        if (pausedAutoConnect && connectResult) {
             pausedAutoConnect = false; // Unpause for next attempts
         }
         if (recentlyLostConnection && autoInitiated) {
@@ -484,12 +476,14 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
                     closeToTraySettingCB.handleEvent(*event, mousePos, *window);
                     settings.preferences.closeToTray = closeToTraySettingCB.isChecked();
                     autoConnectSettingCB.handleEvent(*event, mousePos, *window);
-                    settings.preferences.autoConnect = autoConnectSettingCB.isChecked();
+                    if (autoConnectSettingCB.wasJustUpdated()) {
+                        settings.preferences.autoConnect = autoConnectSettingCB.isChecked();
+                    }
                     if (startupSettingCB.wasJustUpdated()) {
                         if (startupSettingCB.isChecked()) {
                             if (startupManager.IsInStartup(true)) {
                                 LOG_INFO << "Already in Windows startup.\n";
-                            } else if (startupManager.AddToStartup(settings.preferences.startMinimized)) {
+                            } else if (startupManager.AddToStartup()) {
                                 LOG_INFO << "Added to Windows startup successfully.\n";
                             } else {
                                 LOG_ERROR << "Failed to add to Windows startup.\n";
@@ -554,15 +548,20 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
                     lastConnectAttemptClock.restart();
                 } else if (connectionState == ConnectionState::Connecting) {
                     // Cancel connection attempt
+                    connection.cancelConnection();
                     if (connectThread.joinable()) {
                         connectThread.join();
                     }
-                    connection.disconnect();
                     connectionState = ConnectionState::Disconnected;
                     statusMsg = "Connection cancelled";
                     connectBtn.setLabel("Connect");
                     connectBtn.setColor(sf::Color(100, 255, 100), sf::Color(150, 255, 150));
                     statusIndicator.setFillColor(sf::Color::Red);
+                    if (settings.preferences.autoConnect) {
+                        statusMsg = "Connection cancelled. AutoConnect paused.";
+                        settings.preferences.autoConnect = false;
+                        pausedAutoConnect = true;
+                    }
                 }
             }
         }
@@ -583,7 +582,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
             recentlyLostConnection = true;
         }
 
-        if (settings.preferences.autoConnect && connectionState == ConnectionState::Disconnected && (firstConnectionAttempt || lastConnectAttemptClock.getElapsedTime().asSeconds() > 5.0f)) {
+        if (settings.preferences.autoConnect && connectionState == ConnectionState::Disconnected && (firstConnectionAttempt || lastConnectAttemptClock.getElapsedTime().asSeconds() > 12.0f)) {
             LOG_INFO << "AutoConnecting...\n";
             attemptConnection(true);
             firstConnectionAttempt = false;
