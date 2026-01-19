@@ -198,6 +198,25 @@ public:
         // Check if config.txt exists (required for flash mode)
         return std::filesystem::exists(assetDir_ + "config.txt");
     }
+
+    // Get the name of the skin currently flashed to the board
+    std::string getLastFlashedSkinName() const {
+        std::string configPath = assetDir_ + "config.txt";
+        if (!std::filesystem::exists(configPath)) {
+            return "";
+        }
+        std::ifstream cfg(configPath);
+        if (!cfg) {
+            return "";
+        }
+        std::string line;
+        while (std::getline(cfg, line)) {
+            if (line.rfind("skin_name=", 0) == 0) {
+                return line.substr(10);  // Length of "skin_name="
+            }
+        }
+        return "";
+    }
     
     // Clear all files from asset directory
     bool clearAssetDirectory() {

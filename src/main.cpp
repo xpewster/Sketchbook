@@ -309,19 +309,21 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
         if (connectThread.joinable()) {
             connectThread.join();
         }
-        connectThread = std::thread([&connection, &connectResult, &connectFinished, ip = connectingIP, port = settings.network.espPort]() {
+        connectThread = std::thread([&connection, &connectResult, &connectFinished, &autoInitiated, &recentlyLostConnection, &trayManager, &pausedAutoConnect,
+                ip = connectingIP, port = settings.network.espPort]() {
             connectResult = connection.connect(ip, port);
             LOG_INFO << "Connection attempt to " << ip << ":" << port << (connectResult ? " succeeded" : " failed") << "\n";
             connectFinished = true;
+            if (pausedAutoConnect && connectResult) {
+                pausedAutoConnect = false; // Unpause for next attempts
+            }
+            if (recentlyLostConnection && autoInitiated && connectResult) {
+                trayManager.ShowNotification("Reconnected", "Sketchbook was able to find it's pencil all on its own!", NIIF_USER);
+                recentlyLostConnection = false;
+            }
         });
 
-        if (pausedAutoConnect && connectResult) {
-            pausedAutoConnect = false; // Unpause for next attempts
-        }
-        if (recentlyLostConnection && autoInitiated && connectResult) {
-            trayManager.ShowNotification("Reconnected", "Sketchbook was able to find it's pencil all on its own!", NIIF_USER);
-            recentlyLostConnection = false;
-        }
+        
     };
 
     auto disconnect = [&](bool userInitiated = false) {
@@ -354,6 +356,10 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
             LOG_INFO << "New skin supports flash mode. Defaultly enabling flash mode for new skin.\n";
             flashModeCB.setChecked(true, true);
             settings.preferences.flashMode = true;
+            flash::AnimeSkinFlashExporter tempExporter(settings.network.espDrive);
+            if (newSkinName != tempExporter.getLastFlashedSkinName()) {
+                trayManager.ShowNotification("Flash required", "The new skin needs a MemFlash to be drawn properly! Open sketchbook to initiate.", NIIF_USER);
+            }
         }
     };
 
