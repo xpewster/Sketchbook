@@ -207,7 +207,7 @@ def load_appropriate_gif(mode):
             return g, tg
     
     # Fall back to default idle GIF for streaming mode
-    g, tg = load_gif("/test/sketchbook.gif")
+    g, tg = load_gif("/default/sketchbook.gif")
     if g:
         print("Loaded default idle GIF")
         return g, tg
@@ -368,6 +368,7 @@ client_socket = None
 
 frame_count = 0
 fps_start = time.monotonic()
+last_successful_frame_time = time.monotonic()
 
 while True:
     # Accept new connection
@@ -419,11 +420,13 @@ while True:
                     print(f"FPS: {fps:.1f}")
                     frame_count = 0
                     fps_start = now
-            else:
+                last_successful_frame_time = time.monotonic()
+            elif time.monotonic() - last_successful_frame_time > 20.0:
                 print("Client disconnected")
                 client_socket.close()
                 client_socket = None
                 connected = False
+                last_successful_frame_time = time.monotonic()
                 
                 # Switch back to loading GIF
                 setup_disconnected_display()
