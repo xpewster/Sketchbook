@@ -318,7 +318,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
         if (pausedAutoConnect && connectResult) {
             pausedAutoConnect = false; // Unpause for next attempts
         }
-        if (recentlyLostConnection && autoInitiated) {
+        if (recentlyLostConnection && autoInitiated && connectResult) {
             trayManager.ShowNotification("Reconnected", "Sketchbook was able to find it's pencil all on its own!", NIIF_USER);
             recentlyLostConnection = false;
         }

@@ -11,6 +11,10 @@
 #include "tcp.hpp"
 
 #define WM_TRAYICON (WM_USER + 1)
+#define WM_TRAY_RETRY (WM_USER + 2)
+
+// Registered message for explorer restart notification
+static UINT WM_TASKBARCREATED = 0;
 
 
 enum TrayMenuID {
@@ -45,7 +49,12 @@ private:
     std::vector<std::wstring> skinNames;
     std::mutex skinMutex;
     int currentSkinIndex;
-    
+
+    std::atomic<bool> iconAdded;
+    int retryCount;
+    static constexpr int MAX_RETRY_COUNT = 30;
+    static constexpr int RETRY_DELAY_MS = 2000;
+
     // Window procedure for the hidden tray window
     static LRESULT CALLBACK TrayWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
         TrayManager* pThis = reinterpret_cast<TrayManager*>(GetWindowLongPtr(hWnd, GWLP_USERDATA));
@@ -85,8 +94,26 @@ private:
                 break;
                 
             case WM_DESTROY:
+                KillTimer(hWnd, 1);
                 Shell_NotifyIcon(NIM_DELETE, &nid);
                 PostQuitMessage(0);
+                break;
+            
+            case WM_TIMER:
+                if (wParam == 1) {
+                    // Retry adding tray icon
+                    TryAddTrayIcon();
+                }
+                break;
+            
+            default:
+                // Handle TaskbarCreated message (explorer restart)
+                if (uMsg == WM_TASKBARCREATED && WM_TASKBARCREATED != 0) {
+                    LOG_INFO << "Taskbar created message received, re-adding tray icon.\n";
+                    iconAdded = false;
+                    retryCount = 0;
+                    TryAddTrayIcon();
+                }
                 break;
         }
         return DefWindowProc(hWnd, uMsg, wParam, lParam);
@@ -169,6 +196,31 @@ private:
             AppendMenuW(hSkinMenu, MF_STRING | MF_GRAYED, 0, L"(No skins)");
         }
     }
+
+    // Attempt to add tray icon, with retry on failure
+    void TryAddTrayIcon() {
+        if (iconAdded) {
+            KillTimer(trayHwnd, 1);
+            return;
+        }
+        
+        if (Shell_NotifyIcon(NIM_ADD, &nid)) {
+            LOG_INFO << "Tray icon added successfully.\n";
+            iconAdded = true;
+            KillTimer(trayHwnd, 1);
+        } else {
+            retryCount++;
+            if (retryCount < MAX_RETRY_COUNT) {
+                LOG_INFO << "Failed to add tray icon (attempt " << retryCount 
+                         << "), will retry in " << RETRY_DELAY_MS << "ms. Error: " << GetLastError() << ".\n";
+                SetTimer(trayHwnd, 1, RETRY_DELAY_MS, NULL);
+            } else {
+                LOG_ERROR << "Failed to add tray icon after " << MAX_RETRY_COUNT 
+                          << " attempts, error: " << GetLastError() << ".\n";
+                KillTimer(trayHwnd, 1);
+            }
+        }
+    }
     
     // Thread function that runs the Windows message loop
     void MessageLoop() {
@@ -235,6 +287,12 @@ private:
         AppendMenuW(hMenu, MF_STRING, MENU_RESET_BOARD, L"Reset board");
         AppendMenuW(hMenu, MF_STRING, MENU_CLOSE, L"Close");
         
+        // Register for TaskbarCreated message (sent when explorer restarts)
+        WM_TASKBARCREATED = RegisterWindowMessageW(L"TaskbarCreated");
+        
+        // Try to add the tray icon (with retry if shell isn't ready)
+        TryAddTrayIcon();
+        
         running = true;
         
         // Windows message loop
@@ -258,7 +316,7 @@ public:
           shouldRestore(false), shouldExit(false), shouldConnect(false),
           shouldDisconnect(false), shouldRefreshSkin(false), shouldResetBoard(false), selectedSkinIndex(-1),
           running(false), connectionState(ConnectionState::Disconnected),
-          currentSkinIndex(-1) {
+          currentSkinIndex(-1), iconAdded(false), retryCount(0) {
         
         ZeroMemory(&nid, sizeof(NOTIFYICONDATA));
         
@@ -269,8 +327,6 @@ public:
         while (!running && !shouldExit) {
             Sleep(10);
         }
-
-        Shell_NotifyIcon(NIM_ADD, &nid);
     }
     
     ~TrayManager() {
