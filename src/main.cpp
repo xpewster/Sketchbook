@@ -215,7 +215,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
     refreshBtn.setColor(sf::Color(252, 186, 3), sf::Color(252, 205, 76));
     refreshBtn.setIcon("resources/Refresh.png", 0, 0, 24, 24);
     Checkbox frameLockCB(400, 8, 12, "Frame lock", font, 4, -2, settings.preferences.frameLock);
-    InfoIcon frameLockInfo(485, 8, 15, "resources/Info.png", "When enabled, the sender thread will wait for the remote device to finish processing each frame before progressing the animation. This prevents frame drops at the expense of slower animation.", font);
+    InfoIcon frameLockInfo(485, 8, 15, "resources/Info.png", "When enabled, the sender thread will wait for the remote device to finish processing each frame before progressing the animation. This prevents frame drops at the expense of possibly slower animation.", font);
     Checkbox flashModeCB(400, 24, 12, "Flash mode", font, 4, -2, settings.preferences.flashMode);
     InfoIcon flashModeInfo(485, 22, 15, "resources/Info.png", "When enabled, the program will only send raw data and selected image streaming to the remote device. The rest of the image will have to be flashed to the remote device along with any relevant config and developed there. The button below initiates the flash sequence.", font);
     Checkbox dirtyRectCB((float)(windowWidth - 150), (float)(windowHeight - 22), 12, "Show dirty rects", font, 4, -2, settings.preferences.showDirtyRects);
@@ -295,6 +295,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
     bool pendingModeSync = false; // Track if we need to send mode selection after connection
     bool pausedAutoConnect = false; // Stops instant reconnects after manual disconnection when AutoConnect is enabled
     bool recentlyLostConnection = false;
+    bool suppressNotifsDuringMemFlash = false;
 
     auto attemptConnection = [&](bool autoInitiated = false) {
         connectionState = ConnectionState::Connecting;
@@ -310,7 +311,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
         if (connectThread.joinable()) {
             connectThread.join();
         }
-        connectThread = std::thread([&connection, &connectResult, &connectFinished, &autoInitiated, &recentlyLostConnection, &trayManager, &pausedAutoConnect, &settings,
+        connectThread = std::thread([&connection, &connectResult, &connectFinished, &autoInitiated, &recentlyLostConnection, &trayManager, &pausedAutoConnect, &settings, &suppressNotifsDuringMemFlash,
                 ip = connectingIP, port = settings.network.espPort]() {
             connectResult = connection.connect(ip, port);
             LOG_INFO << "Connection attempt to " << ip << ":" << port << (connectResult ? " succeeded" : " failed") << "\n";
@@ -320,8 +321,15 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
                 settings.preferences.autoConnect = true; // Re-enable AutoConnect if it was paused due to manual disconnection
             }
             if (recentlyLostConnection && autoInitiated && connectResult) {
-                trayManager.ShowNotification("Reconnected", "Sketchbook was able to find it's pencil all on its own!", NIIF_USER);
+                if (!suppressNotifsDuringMemFlash) {
+                    trayManager.ShowNotification("Reconnected", "Sketchbook was able to find it's pencil all on its own!", NIIF_USER);
+                } else {
+                    trayManager.ShowNotification("MemFlash complete!", "Sketchbook is back online and ready to draw!", NIIF_USER);
+                }
                 recentlyLostConnection = false;
+            }
+            if (connectResult) {
+                suppressNotifsDuringMemFlash = false;
             }
         });
     };
@@ -343,6 +351,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
     };
 
     auto memFlash = [&]() {
+        if (connected) {
+            suppressNotifsDuringMemFlash = true;
+        }
         flash::AnimeSkinFlashExporter exporter(settings.network.espDrive);
                 
         // Check if flashable first
@@ -394,6 +405,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
                     flashModeCB.setChecked(true, true);
                     settings.preferences.flashMode = true;
                 } else {
+                    LOG_INFO << "AutoMemFlash is disabled, notifying user to flash new skin: " << newSkinName << ". Switching off flash mode\n";
                     trayManager.ShowNotification("Flash required", std::string("The new skin recommends a MemFlash to be drawn properly! Open sketchbook to initiate.") + (settings.preferences.flashMode ? " (Flash mode has been switched off)" : ""), NIIF_USER);
                     flashModeCB.setChecked(false, true);
                     settings.preferences.flashMode = false;
@@ -549,7 +561,6 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
                 memFlash();
             }
 
-            
             if (refreshBtn.update(mousePos, mousePressed, *window)) {
                 windowInitiatedSkinRefresh = true; // Defer action until outside window loop to allow it to work if window hasn't been created yet
             }
@@ -596,7 +607,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
             connectBtn.setColor(sf::Color(100, 255, 100), sf::Color(150, 255, 150));
             statusIndicator.setFillColor(sf::Color::Red);
             sender.clearError();
-            trayManager.ShowNotification("Connection lost", "Sketchbook has lost connection with it's pencil!", NIIF_USER);
+            if (!suppressNotifsDuringMemFlash) {
+                trayManager.ShowNotification("Connection lost", "Sketchbook has lost connection with it's pencil!", NIIF_USER);
+            }
             recentlyLostConnection = true;
         }
 
@@ -617,6 +630,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
             if (traySelectedSkin != skinName) {
                 LOG_INFO << "Skin change from system tray menu: " << traySelectedSkin << "\n";
                 selectSkin(traySelectedSkin);
+                skinName = traySelectedSkin;
                 skinDropdown.setSelectedIndex(traySkinIndex);
                 trayManager.SetCurrentSkinIndex(traySkinIndex);
             }
@@ -646,6 +660,40 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
                 LOG_WARN << "Cannot reset board - not connected\n";
                 trayManager.ShowNotification("Cannot reset board", "Sketchbook must be connected to the remote board to reset it.", NIIF_WARNING);
                 statusMsg = "Not connected - cannot reset board";
+            }
+        }
+        
+        // Handle tray menu mode actions
+        if (trayManager.ShouldToggleFrameLock()) {
+            bool newState = !settings.preferences.frameLock;
+            settings.preferences.frameLock = newState;
+            frameLockCB.setChecked(newState, true);
+            LOG_INFO << "Frame lock toggled from tray: " << (newState ? "enabled" : "disabled") << "\n";
+        }
+        if (trayManager.ShouldSetStreamingMode()) {
+            // Turn off flash mode
+            if (settings.preferences.flashMode) {
+                settings.preferences.flashMode = false;
+                flashModeCB.setChecked(false, true);
+                pendingFlashRevert = true;
+                LOG_INFO << "Switched to streaming mode from tray\n";
+            }
+        }
+        if (trayManager.ShouldSetFlashMode()) {
+            // Turn on flash mode (without MemFlash)
+            settings.preferences.flashMode = true;
+            flashModeCB.setChecked(true, true);
+            pendingFlashRevert = true;
+            LOG_INFO << "Switched to flash mode from tray\n";
+        }
+        if (trayManager.ShouldSetFlashModeMemFlash()) {
+            // Turn on flash mode with MemFlash
+            if (!settings.preferences.flashMode) {
+                 LOG_INFO << "Switching to flash mode with MemFlash from tray\n";
+                trayManager.ShowNotification("MemFlash initiated", "Sketchbook is adding some stickers to the board. Please give it a second.", NIIF_USER);
+                memFlash();
+                settings.preferences.flashMode = true;
+                flashModeCB.setChecked(true, true);
             }
         }
         
@@ -682,6 +730,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
             }
         }
         trayManager.SetConnectionState(connectionState);
+        trayManager.SetFlashModeState(settings.preferences.flashMode);
+        trayManager.SetFrameLockState(settings.preferences.frameLock);
 
         if (connected) {
             firstConnectionAttempt = true; // Allow immediate reconnect after a successful connection

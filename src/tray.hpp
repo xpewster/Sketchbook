@@ -23,6 +23,10 @@ enum TrayMenuID {
     MENU_REFRESH_SKIN = 3,
     MENU_RESET_BOARD = 4,
     MENU_CLOSE = 5,
+    MENU_FRAME_LOCK = 6,
+    MENU_MODE_STREAMING = 7,
+    MENU_MODE_FLASH = 8,
+    MENU_MODE_FLASH_MEM = 9,
     MENU_SKIN_BASE = 100  // Skin submenu items start at 100
 };
 
@@ -31,6 +35,7 @@ private:
     NOTIFYICONDATA nid;
     HMENU hMenu;
     HMENU hSkinMenu;
+    HMENU hModeMenu;
     HWND trayHwnd;          // Hidden window for receiving tray messages
     HWND mainHwnd;          // SFML window handle
     std::thread messageThread;
@@ -41,10 +46,16 @@ private:
     std::atomic<bool> shouldDisconnect;
     std::atomic<bool> shouldRefreshSkin;
     std::atomic<bool> shouldResetBoard;
+    std::atomic<bool> shouldToggleFrameLock;
+    std::atomic<bool> shouldSetStreamingMode;
+    std::atomic<bool> shouldSetFlashMode;
+    std::atomic<bool> shouldSetFlashModeMemFlash;
     std::atomic<int> selectedSkinIndex;  // -1 means no selection
     std::atomic<bool> running;
     
     std::atomic<ConnectionState> connectionState;
+    std::atomic<bool> flashModeState;
+    std::atomic<bool> frameLockState;
     
     std::vector<std::wstring> skinNames;
     std::mutex skinMutex;
@@ -137,6 +148,14 @@ private:
             shouldRefreshSkin = true;
         } else if (cmd == MENU_RESET_BOARD) {
             shouldResetBoard = true;
+        } else if (cmd == MENU_FRAME_LOCK) {
+            shouldToggleFrameLock = true;
+        } else if (cmd == MENU_MODE_STREAMING) {
+            shouldSetStreamingMode = true;
+        } else if (cmd == MENU_MODE_FLASH) {
+            shouldSetFlashMode = true;
+        } else if (cmd == MENU_MODE_FLASH_MEM) {
+            shouldSetFlashModeMemFlash = true;
         } else if (cmd == MENU_CLOSE) {
             shouldExit = true;
         } else if (cmd >= MENU_SKIN_BASE) {
@@ -174,6 +193,9 @@ private:
         
         SetMenuItemInfo(hMenu, MENU_CONNECT, FALSE, &mii);
         
+        // Rebuild mode submenu based on current flash mode state
+        RebuildModeMenu();
+        
         // Update skin submenu checkmarks
         std::lock_guard<std::mutex> lock(skinMutex);
         for (int i = 0; i < static_cast<int>(skinNames.size()); i++) {
@@ -197,6 +219,32 @@ private:
         
         if (skinNames.empty()) {
             AppendMenuW(hSkinMenu, MF_STRING | MF_GRAYED, 0, L"(No skins)");
+        }
+    }
+    
+    void RebuildModeMenu() {
+        // Clear existing items
+        while (DeleteMenu(hModeMenu, 0, MF_BYPOSITION)) {}
+        
+        bool isFlashMode = flashModeState.load();
+        bool isFrameLock = frameLockState.load();
+        
+        // Frame lock toggle (always present)
+        UINT frameLockFlags = MF_STRING;
+        if (isFrameLock) {
+            frameLockFlags |= MF_CHECKED;
+        }
+        AppendMenuW(hModeMenu, frameLockFlags, MENU_FRAME_LOCK, L"Frame lock");
+        
+        AppendMenuW(hModeMenu, MF_SEPARATOR, 0, NULL);
+        
+        if (isFlashMode) {
+            // Flash mode is ON - show option to switch to streaming
+            AppendMenuW(hModeMenu, MF_STRING, MENU_MODE_STREAMING, L"Turn on streaming mode");
+        } else {
+            // Flash mode is OFF - show options to enable flash mode
+            AppendMenuW(hModeMenu, MF_STRING, MENU_MODE_FLASH, L"Turn on flash mode");
+            AppendMenuW(hModeMenu, MF_STRING, MENU_MODE_FLASH_MEM, L"Turn on flash mode (MemFlash)");
         }
     }
 
@@ -279,15 +327,21 @@ private:
         hSkinMenu = CreatePopupMenu();
         AppendMenuW(hSkinMenu, MF_STRING | MF_GRAYED, 0, L"(No skins)");
         
+        // Create mode submenu
+        hModeMenu = CreatePopupMenu();
+        RebuildModeMenu();
+        
         // Create context menu
         hMenu = CreatePopupMenu();
         AppendMenuW(hMenu, MF_STRING, MENU_OPEN, L"Open");
         AppendMenuW(hMenu, MF_SEPARATOR, 0, NULL);
-        AppendMenuW(hMenu, MF_STRING, MENU_CONNECT, L"Connect");
         AppendMenuW(hMenu, MF_STRING | MF_POPUP, (UINT_PTR)hSkinMenu, L"Change skin");
         AppendMenuW(hMenu, MF_STRING, MENU_REFRESH_SKIN, L"Refresh skin");
         AppendMenuW(hMenu, MF_SEPARATOR, 0, NULL);
+        AppendMenuW(hMenu, MF_STRING, MENU_CONNECT, L"Connect");
+        AppendMenuW(hMenu, MF_STRING | MF_POPUP, (UINT_PTR)hModeMenu, L"Change mode");
         AppendMenuW(hMenu, MF_STRING, MENU_RESET_BOARD, L"Reset board");
+        AppendMenuW(hMenu, MF_SEPARATOR, 0, NULL);
         AppendMenuW(hMenu, MF_STRING, MENU_CLOSE, L"Close");
         
         // Register for TaskbarCreated message (sent when explorer restarts)
@@ -308,6 +362,7 @@ private:
         // Cleanup
         Shell_NotifyIcon(NIM_DELETE, &nid);
         DestroyMenu(hSkinMenu);
+        DestroyMenu(hModeMenu);
         DestroyMenu(hMenu);
         DestroyWindow(trayHwnd);
         running = false;
@@ -315,10 +370,14 @@ private:
     
 public:
     TrayManager(HWND sfmlWindow) 
-        : mainHwnd(sfmlWindow), trayHwnd(NULL), hMenu(NULL), hSkinMenu(NULL),
+        : mainHwnd(sfmlWindow), trayHwnd(NULL), hMenu(NULL), hSkinMenu(NULL), hModeMenu(NULL),
           shouldRestore(false), shouldExit(false), shouldConnect(false),
-          shouldDisconnect(false), shouldRefreshSkin(false), shouldResetBoard(false), selectedSkinIndex(-1),
+          shouldDisconnect(false), shouldRefreshSkin(false), shouldResetBoard(false),
+          shouldToggleFrameLock(false), shouldSetStreamingMode(false),
+          shouldSetFlashMode(false), shouldSetFlashModeMemFlash(false),
+          selectedSkinIndex(-1),
           running(false), connectionState(ConnectionState::Disconnected),
+          flashModeState(false), frameLockState(false),
           currentSkinIndex(-1), iconAdded(false), retryCount(0) {
         
         ZeroMemory(&nid, sizeof(NOTIFYICONDATA));
@@ -386,12 +445,40 @@ public:
         return shouldResetBoard.exchange(false);
     }
     
+    // Check if user toggled frame lock from tray
+    bool ShouldToggleFrameLock() {
+        return shouldToggleFrameLock.exchange(false);
+    }
+    
+    // Check if user wants to switch to streaming mode
+    bool ShouldSetStreamingMode() {
+        return shouldSetStreamingMode.exchange(false);
+    }
+    
+    // Check if user wants to enable flash mode
+    bool ShouldSetFlashMode() {
+        return shouldSetFlashMode.exchange(false);
+    }
+    
+    // Check if user wants to enable flash mode with MemFlash
+    bool ShouldSetFlashModeMemFlash() {
+        return shouldSetFlashModeMemFlash.exchange(false);
+    }
+    
     int GetSelectedSkinIndex() {
         return selectedSkinIndex.exchange(-1);
     }
     
     void SetConnectionState(ConnectionState state) {
         connectionState = state;
+    }
+    
+    void SetFlashModeState(bool enabled) {
+        flashModeState = enabled;
+    }
+    
+    void SetFrameLockState(bool enabled) {
+        frameLockState = enabled;
     }
     
     // Set available skins
