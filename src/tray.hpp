@@ -55,6 +55,9 @@ private:
     static constexpr int MAX_RETRY_COUNT = 30;
     static constexpr int RETRY_DELAY_MS = 2000;
 
+    std::chrono::steady_clock::time_point lastImportantNotificationTime; // Cannot show other notifications within N seconds of this time
+    static constexpr int NOTIFICATION_COOLDOWN_SECONDS = 5;
+
     // Window procedure for the hidden tray window
     static LRESULT CALLBACK TrayWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
         TrayManager* pThis = reinterpret_cast<TrayManager*>(GetWindowLongPtr(hWnd, GWLP_USERDATA));
@@ -447,7 +450,17 @@ public:
         Shell_NotifyIcon(NIM_MODIFY, &nidBalloon);
     }
     
-    void ShowNotification(const std::string& title, const std::string& message, DWORD iconType = NIIF_INFO) {
+    void ShowNotification(const std::string& title, const std::string& message, DWORD iconType = NIIF_INFO, bool important = false) {
+        // Check last important notification time to prevent another message if within cooldown period
+        auto now = std::chrono::steady_clock::now();
+        if (std::chrono::duration_cast<std::chrono::seconds>(now - lastImportantNotificationTime).count() < NOTIFICATION_COOLDOWN_SECONDS) {
+            LOG_INFO << "Skipping notification \"" << title << "\" due to cooldown.\n";
+            return;
+        }
+        if (important) {
+            lastImportantNotificationTime = now;
+        }
+
         auto toWide = [](const std::string& str) {
             int wideLen = MultiByteToWideChar(CP_UTF8, 0, str.c_str(), -1, NULL, 0);
             std::wstring wide(wideLen - 1, 0);

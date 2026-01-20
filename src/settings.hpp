@@ -42,6 +42,7 @@ public:
         bool startMinimized = false;
         bool closeToTray = true;
         bool autoConnect = false;
+        bool autoMemFlash = false;
     };
 
     struct TrainConfig {
@@ -83,6 +84,7 @@ public:
                 preferences.closeToTray = (*prefTable)["close_to_tray"].value_or(true);
                 preferences.autoConnect = (*prefTable)["auto_connect"].value_or(false);
                 preferences.startMinimized = (*prefTable)["start_minimized"].value_or(false);
+                preferences.autoMemFlash = (*prefTable)["auto_mem_flash"].value_or(false);
             }
             
             // Parse weather settings
@@ -163,7 +165,8 @@ public:
                 {"frame_lock_real_time_preview", preferences.frameLockRealTimePreview},
                 {"start_minimized", preferences.startMinimized},
                 {"close_to_tray", preferences.closeToTray},
-                {"auto_connect", preferences.autoConnect}
+                {"auto_connect", preferences.autoConnect},
+                {"auto_mem_flash", preferences.autoMemFlash}
             });
 
             config.insert_or_assign("train", toml::table{

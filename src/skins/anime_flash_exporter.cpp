@@ -169,6 +169,60 @@ private:
         return { 0, 0 };
     }
     
+    // Resize an image to target dimensions using bilinear filtering
+    // Returns a new resized image. If targetW or targetH is 0, returns a copy of the original.
+    sf::Image resizeImage(const sf::Image& src, int targetW, int targetH) {
+        sf::Vector2u srcSize = src.getSize();
+        int srcW = static_cast<int>(srcSize.x);
+        int srcH = static_cast<int>(srcSize.y);
+        
+        // If no resize needed, return copy
+        if (targetW <= 0 || targetH <= 0 || (targetW == srcW && targetH == srcH)) {
+            return src;  // Returns a copy
+        }
+        
+        sf::Image dst;
+        dst.resize(sf::Vector2u(targetW, targetH));
+        
+        // Bilinear interpolation
+        float xRatio = static_cast<float>(srcW) / targetW;
+        float yRatio = static_cast<float>(srcH) / targetH;
+        
+        for (int dstY = 0; dstY < targetH; dstY++) {
+            for (int dstX = 0; dstX < targetW; dstX++) {
+                float srcX = dstX * xRatio;
+                float srcY = dstY * yRatio;
+                
+                int x0 = static_cast<int>(srcX);
+                int y0 = static_cast<int>(srcY);
+                int x1 = min(x0 + 1, srcW - 1);
+                int y1 = min(y0 + 1, srcH - 1);
+                
+                float xFrac = srcX - x0;
+                float yFrac = srcY - y0;
+                
+                sf::Color c00 = src.getPixel(sf::Vector2u(x0, y0));
+                sf::Color c10 = src.getPixel(sf::Vector2u(x1, y0));
+                sf::Color c01 = src.getPixel(sf::Vector2u(x0, y1));
+                sf::Color c11 = src.getPixel(sf::Vector2u(x1, y1));
+                
+                // Interpolate
+                auto lerp = [](uint8_t a, uint8_t b, float t) -> uint8_t {
+                    return static_cast<uint8_t>(a + t * (b - a));
+                };
+                
+                uint8_t r = lerp(lerp(c00.r, c10.r, xFrac), lerp(c01.r, c11.r, xFrac), yFrac);
+                uint8_t g = lerp(lerp(c00.g, c10.g, xFrac), lerp(c01.g, c11.g, xFrac), yFrac);
+                uint8_t b = lerp(lerp(c00.b, c10.b, xFrac), lerp(c01.b, c11.b, xFrac), yFrac);
+                uint8_t a = lerp(lerp(c00.a, c10.a, xFrac), lerp(c01.a, c11.a, xFrac), yFrac);
+                
+                dst.setPixel(sf::Vector2u(dstX, dstY), sf::Color(r, g, b, a));
+            }
+        }
+        
+        return dst;
+    }
+    
     // Rotate an image according to rotation_ setting
     // Returns a new rotated image
     sf::Image rotateImage(const sf::Image& src) {
@@ -212,6 +266,10 @@ private:
         float fps = getParamFloat(params, "skin.background.animation.speed", 1.0f);
         std::string bgFile = getParamFilename(params, "skin.background.png", skinDir);
         
+        // Get target dimensions for background (0 = use original size)
+        int targetW = getParamInt(params, "skin.background.width", 0);
+        int targetH = getParamInt(params, "skin.background.height", 0);
+        
         if (bgFile.empty()) return true;  // No background configured
         
         std::string basePath = skinDir + "/" + bgFile;
@@ -219,13 +277,13 @@ private:
         if (animated && frameCount > 1) {
             // Export as animated GIF
             std::string outPath = assetDir_ + "background.gif";
-            if (!exportAnimationToGif(basePath, frameCount, fps, outPath, result)) {
+            if (!exportAnimationToGif(basePath, frameCount, fps, outPath, result, targetW, targetH)) {
                 return false;
             }
         } else {
             // Export as static RGB565
             std::string outPath = assetDir_ + "background.r565";
-            if (!exportImageToRGB565(basePath, outPath, result)) {
+            if (!exportImageToRGB565(basePath, outPath, result, targetW, targetH)) {
                 return false;
             }
         }
@@ -237,6 +295,10 @@ private:
     bool exportCharacter(const std::string& skinDir,
                          const std::unordered_map<std::string, std::string>& params,
                          ExportResult& result) {
+        // Get target dimensions for character (0 = use original size)
+        int targetW = getParamInt(params, "skin.character.width", 0);
+        int targetH = getParamInt(params, "skin.character.height", 0);
+        
         // Normal state
         std::string charFile = getParamFilename(params, "skin.character.png", skinDir);
         if (!charFile.empty()) {
@@ -246,11 +308,11 @@ private:
             std::string basePath = skinDir + "/" + charFile;
             
             if (animated && frameCount > 1) {
-                if (!exportAnimationToGif(basePath, frameCount, fps, assetDir_ + "character.gif", result)) {
+                if (!exportAnimationToGif(basePath, frameCount, fps, assetDir_ + "character.gif", result, targetW, targetH)) {
                     return false;
                 }
             } else {
-                if (!exportImageToRGB565(basePath, assetDir_ + "character.r565", result)) {
+                if (!exportImageToRGB565(basePath, assetDir_ + "character.r565", result, targetW, targetH)) {
                     return false;
                 }
             }
@@ -268,11 +330,11 @@ private:
             std::string basePath = skinDir + "/" + warmFile;
             
             if (animated && frameCount > 1) {
-                if (!exportAnimationToGif(basePath, frameCount, fps, assetDir_ + "character_warm.gif", result)) {
+                if (!exportAnimationToGif(basePath, frameCount, fps, assetDir_ + "character_warm.gif", result, targetW, targetH)) {
                     return false;
                 }
             } else {
-                if (!exportImageToRGB565(basePath, assetDir_ + "character_warm.r565", result)) {
+                if (!exportImageToRGB565(basePath, assetDir_ + "character_warm.r565", result, targetW, targetH)) {
                     return false;
                 }
             }
@@ -290,11 +352,11 @@ private:
             std::string basePath = skinDir + "/" + hotFile;
             
             if (animated && frameCount > 1) {
-                if (!exportAnimationToGif(basePath, frameCount, fps, assetDir_ + "character_hot.gif", result)) {
+                if (!exportAnimationToGif(basePath, frameCount, fps, assetDir_ + "character_hot.gif", result, targetW, targetH)) {
                     return false;
                 }
             } else {
-                if (!exportImageToRGB565(basePath, assetDir_ + "character_hot.r565", result)) {
+                if (!exportImageToRGB565(basePath, assetDir_ + "character_hot.r565", result, targetW, targetH)) {
                     return false;
                 }
             }
@@ -304,7 +366,7 @@ private:
     }
     
     // Export weather icons
-    bool exportWeatherIcons(const std::string& skinDir,
+   bool exportWeatherIcons(const std::string& skinDir,
                             const std::unordered_map<std::string, std::string>& params,
                             ExportResult& result) {
         const char* iconKeys[] = {
@@ -326,9 +388,17 @@ private:
             "weather_night"
         };
         
+        // Get target dimensions for weather icons (0 = use original size)
+        int targetW = getParamInt(params, "skin.weather.icon.width", 0);
+        int targetH = getParamInt(params, "skin.weather.icon.height", 0);
+        
         for (int i = 0; i < WEATHER_COUNT; i++) {
             std::string iconFile = getParamFilename(params, std::string(iconKeys[i]) + ".png", skinDir);
-            if (iconFile.empty()) continue;
+            if (iconFile.empty()) {
+                result.error = "Missing weather icon: " + std::string(iconKeys[i]) + ".png";
+                LOG_WARN << "Warning: " << result.error << "\n";
+                return false;
+            }
             
             std::string basePath = skinDir + "/" + iconFile;
             bool animated = getParamBool(params, std::string(iconKeys[i]) + ".animation.enabled", false);
@@ -337,13 +407,15 @@ private:
             
             if (animated && frameCount > 1) {
                 std::string outPath = assetDir_ + outBasenames[i] + ".gif";
-                if (!exportAnimationToGif(basePath, frameCount, fps, outPath, result)) {
+                if (!exportAnimationToGif(basePath, frameCount, fps, outPath, result, targetW, targetH)) {
                     LOG_WARN << "Warning: could not export animated " << iconKeys[i] << "\n";
+                    return false;
                 }
             } else {
                 std::string outPath = assetDir_ + outBasenames[i] + ".r565";
-                if (!exportImageToRGB565(basePath, outPath, result)) {
+                if (!exportImageToRGB565(basePath, outPath, result, targetW, targetH)) {
                     LOG_WARN << "Warning: could not export " << iconKeys[i] << "\n";
+                    return false;
                 }
             }
         }
@@ -408,12 +480,45 @@ private:
         }
     }
     
+    // Apply magenta transparency key to RGBA frame data
+    // Converts transparent pixels (alpha < 128) to magenta (255, 0, 255)
+    // and ensures non-transparent pixels don't accidentally match the transparent color
+    void applyMagentaTransparencyKey(uint8_t* pixels, int width, int height) {
+        for (int i = 0; i < width * height; i++) {
+            uint8_t& r = pixels[i * 4 + 0];
+            uint8_t& g = pixels[i * 4 + 1];
+            uint8_t& b = pixels[i * 4 + 2];
+            uint8_t& a = pixels[i * 4 + 3];
+            
+            if (a < 128) {
+                // Transparent pixel -> magenta
+                r = 255;
+                g = 0;
+                b = 255;
+                a = 255;
+            } else {
+                // Check if this non-transparent pixel would be interpreted as transparent
+                // in RGB565 space (matches 0xF81F when converted)
+                uint16_t rgb565 = toRGB565(r, g, b);
+                if (rgb565 == TRANSPARENT_RGB565) {
+                    // Slightly adjust to avoid being treated as transparent
+                    // Decrement blue slightly so it becomes 0xF81E instead of 0xF81F
+                    if (b > 0) b -= 8;
+                    else r -= 8;
+                }
+                a = 255;
+            }
+        }
+    }
+    
     // Export PNG animation frames to GIF
+    // targetW/targetH: target dimensions before rotation (0 = use original size)
     bool exportAnimationToGif(const std::string& basePath, int frameCount, float fps,
-                              const std::string& outPath, ExportResult& result) {
+                              const std::string& outPath, ExportResult& result,
+                              int targetW = 0, int targetH = 0) {
         std::string pathNoExt = basePath.substr(0, basePath.rfind(".png"));
         
-        // Load first frame to get dimensions (after rotation)
+        // Load first frame to get dimensions (after resize and rotation)
         std::string firstFramePath = pathNoExt + ".0.png";
         sf::Image srcFirstFrame;
         if (!srcFirstFrame.loadFromFile(firstFramePath)) {
@@ -421,8 +526,11 @@ private:
             return false;
         }
         
+        // Resize first frame to target dimensions (before rotation)
+        sf::Image resizedFirstFrame = resizeImage(srcFirstFrame, targetW, targetH);
+        
         // Rotate first frame to get final dimensions
-        sf::Image firstFrame = rotateImage(srcFirstFrame);
+        sf::Image firstFrame = rotateImage(resizedFirstFrame);
         
         // Apply post-processing to get accurate dimensions
         applyPostProcessing(firstFrame);
@@ -450,8 +558,11 @@ private:
                 continue;
             }
             
+            // Resize frame to target dimensions (before rotation)
+            sf::Image resizedFrame = resizeImage(srcFrame, targetW, targetH);
+            
             // Rotate frame to match display orientation
-            sf::Image frame = rotateImage(srcFrame);
+            sf::Image frame = rotateImage(resizedFrame);
             
             // Apply post-processing effects
             applyPostProcessing(frame);
@@ -459,6 +570,9 @@ private:
             // Convert to RGBA format for gif.h
             const uint8_t* pixels = frame.getPixelsPtr();
             memcpy(frameData.data(), pixels, width * height * 4);
+            
+            // Apply magenta transparency key (convert alpha to magenta color key)
+            applyMagentaTransparencyKey(frameData.data(), width, height);
             
             if (!GifWriteFrame(&writer, frameData.data(), width, height, delay)) {
                 result.error = "Failed to write GIF frame " + std::to_string(i);
@@ -480,16 +594,20 @@ private:
     }
     
     // Export single image to raw RGB565 format
+    // targetW/targetH: target dimensions before rotation (0 = use original size)
     bool exportImageToRGB565(const std::string& inPath, const std::string& outPath,
-                             ExportResult& result) {
+                             ExportResult& result, int targetW = 0, int targetH = 0) {
         sf::Image srcImg;
         if (!srcImg.loadFromFile(inPath)) {
             result.error = "Failed to load image: " + inPath;
             return false;
         }
         
+        // Resize to target dimensions (before rotation)
+        sf::Image resizedImg = resizeImage(srcImg, targetW, targetH);
+        
         // Apply rotation to match display orientation
-        sf::Image img = rotateImage(srcImg);
+        sf::Image img = rotateImage(resizedImg);
         
         // Apply post-processing effects
         applyPostProcessing(img);
@@ -615,6 +733,9 @@ private:
             // Get processed pixels and write frame
             const uint8_t* processedPixels = frame.getPixelsPtr();
             memcpy(frameBuffer.data(), processedPixels, frameSize);
+            
+            // Apply magenta transparency key (convert alpha to magenta color key)
+            applyMagentaTransparencyKey(frameBuffer.data(), width, height);
             
             // Use per-frame delay if available, otherwise average
             int frameDelay = (delays && delays[i] > 0) ? (delays[i] / 10) : avgDelay;

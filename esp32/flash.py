@@ -59,6 +59,14 @@ class FlashModeManager:
         
         # Bobbing timing
         self.bob_start_time = time.monotonic()
+        
+        # GIF animation timing (delay in seconds, last advance time)
+        self.bg_gif_delay = 0
+        self.bg_gif_last_time = 0
+        self.char_gif_delay = 0
+        self.char_gif_last_time = 0
+        self.weather_gif_delay = 0
+        self.weather_gif_last_time = 0
     
     def load_assets(self):
         """Load all configured assets from flash."""
@@ -131,7 +139,7 @@ class FlashModeManager:
                     gif = self._load_gif(filepath)
                     if gif:
                         shader = displayio.ColorConverter(input_colorspace=displayio.Colorspace.RGB565_SWAPPED)
-                        shader.make_transparent(0xF81F)
+                        shader.make_transparent(0x1FF8)  # Magenta in RGB565_SWAPPED byte order
                         tg = displayio.TileGrid(gif.bitmap, pixel_shader=shader, x=wx, y=wy)
                         self.weather_tilegrids[i] = tg
                         self.weather_gifs[i] = gif
@@ -177,7 +185,7 @@ class FlashModeManager:
             if gif:
                 # Use ColorConverter with magenta transparency
                 shader = displayio.ColorConverter(input_colorspace=displayio.Colorspace.RGB565_SWAPPED)
-                shader.make_transparent(0xF81F)  # Magenta = transparent
+                shader.make_transparent(0x1FF8)  # Magenta = transparent in RGB565_SWAPPED byte order
                 tg = displayio.TileGrid(
                     gif.bitmap,
                     pixel_shader=shader,
@@ -238,8 +246,8 @@ class FlashModeManager:
         Layer order (bottom to top):
         1. Background (if flashed)
         2. Stream layer (for streamed content)
-        3. Character (if flashed) - on top of stream so character shows over streamed bg
-        4. Weather icons (added/removed dynamically)
+        3. Weather icons (added/removed dynamically)
+        4. Character (if flashed) - on top of stream so character shows over streamed bg
         """
         # Clear existing
         while len(group) > 0:
@@ -252,10 +260,10 @@ class FlashModeManager:
         if self.stream_tilegrid:
             group.append(self.stream_tilegrid)
         
+        # Weather will be added/removed dynamically (on top)
+
         if self.char_tilegrid:
             group.append(self.char_tilegrid)
-        
-        # Weather will be added/removed dynamically (on top)
     
     def get_bob_offset(self, speed, amplitude):
         """Calculate current bobbing offset."""
@@ -331,28 +339,43 @@ class FlashModeManager:
         # Add new weather icon
         if icon_index >= 0 and icon_index < 7 and icon_index in self.weather_tilegrids:
             new_tg = self.weather_tilegrids[icon_index]
-            # Insert before stream layer (which should be last)
+            # Insert after stream layer
             if self.stream_tilegrid in group:
                 idx = group.index(self.stream_tilegrid)
-                group.insert(idx, new_tg)
+                group.insert(idx + 1, new_tg)
             else:
                 group.append(new_tg)
         
         self.last_weather_index = icon_index
     
     def advance_animations(self):
-        """Advance GIF animations."""
+        """Advance GIF animations respecting frame delays."""
+        now = time.monotonic()
+        
+        # Background GIF
         if self.bg_gif:
-            self.bg_gif.next_frame()
+            if now >= self.bg_gif_last_time + self.bg_gif_delay:
+                delay_ms = self.bg_gif.next_frame()
+                self.bg_gif_delay = delay_ms
+                self.bg_gif_last_time = now
         
-        # Advance the currently active character
-        if self.last_char_state == 0 and self.char_gif:
-            self.char_gif.next_frame()
-        elif self.last_char_state == 1 and self.char_warm_gif:
-            self.char_warm_gif.next_frame()
-        elif self.last_char_state == 2 and self.char_hot_gif:
-            self.char_hot_gif.next_frame()
+        # Character GIF (only the active state)
+        char_gif = None
+        if self.last_char_state == 0:
+            char_gif = self.char_gif
+        elif self.last_char_state == 1:
+            char_gif = self.char_warm_gif
+        elif self.last_char_state == 2:
+            char_gif = self.char_hot_gif
         
-        # Advance the currently active weather icon
+        if char_gif and now >= self.char_gif_last_time + self.char_gif_delay:
+            delay_ms = char_gif.next_frame()
+            self.char_gif_delay = delay_ms
+            self.char_gif_last_time = now
+        
+        # Weather icon GIF (only the active one)
         if self.last_weather_index >= 0 and self.last_weather_index in self.weather_gifs:
-            self.weather_gifs[self.last_weather_index].next_frame()
+            if now >= self.weather_gif_last_time + self.weather_gif_delay:
+                delay_ms = self.weather_gifs[self.last_weather_index].next_frame()
+                self.weather_gif_delay = delay_ms
+                self.weather_gif_last_time = now

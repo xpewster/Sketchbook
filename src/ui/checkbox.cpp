@@ -138,6 +138,10 @@ public:
         labelText.setString(label);
     }
 
+    void setLabelTextSize(unsigned int size) {
+        labelText.setCharacterSize(size);
+    }
+    
     void setPosition(float x, float y) {
         position = sf::Vector2f(x, y);
         sf::Vector2 posChange = position - box.getPosition();

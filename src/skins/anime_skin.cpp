@@ -98,6 +98,8 @@
     - "skin.effects.jpegify.enabled": Enable JPEG compression effect on the whole texture (true/false)
     - "skin.effects.jpegify.quality": Quality level for JPEG compression (0-100, default 30)
     - "skin.effects.jpegify.loadinggif": Whether to apply jpegify effect to the loading gif in flash mode (true/false)
+    - "skin.effects.jpegify.character.quality": Quality level for JPEG compression on character layer in flash mode
+    - "skin.effects.jpegify.weather.quality": Quality level for JPEG compression on weather icon layer in flash mode
     
     Fonts:
     - "skin.fonts.font[id=0].ttf": Path to first font TTF file (corresponding PCF should exist with same name)

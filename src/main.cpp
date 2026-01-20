@@ -224,7 +224,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
     Button flashBtn(450, 192, 90, 24, "MemFlash", font);
     flashBtn.setColor(sf::Color(0, 64, 255), sf::Color(54, 99, 235));
     flashBtn.setLabelColor(sf::Color::White);
-    flashModeInfo.setExtraHeight(30);
+    Checkbox autoMemFlashCB(450, 222, 12, "Auto on skin change", font, 4, -2, settings.preferences.autoMemFlash);
+    flashModeInfo.setExtraHeight(48);
     flashModeInfo.enableHoverOverBox(true);
     Checkbox realtimeCB((float)(windowWidth - 280), (float)(windowHeight - 22), 12, "Real-time preview", font, 4, -2, settings.preferences.frameLockRealTimePreview);
     realtimeCB.setLabelColor(sf::Color::White);
@@ -309,21 +310,20 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
         if (connectThread.joinable()) {
             connectThread.join();
         }
-        connectThread = std::thread([&connection, &connectResult, &connectFinished, &autoInitiated, &recentlyLostConnection, &trayManager, &pausedAutoConnect,
+        connectThread = std::thread([&connection, &connectResult, &connectFinished, &autoInitiated, &recentlyLostConnection, &trayManager, &pausedAutoConnect, &settings,
                 ip = connectingIP, port = settings.network.espPort]() {
             connectResult = connection.connect(ip, port);
             LOG_INFO << "Connection attempt to " << ip << ":" << port << (connectResult ? " succeeded" : " failed") << "\n";
             connectFinished = true;
             if (pausedAutoConnect && connectResult) {
                 pausedAutoConnect = false; // Unpause for next attempts
+                settings.preferences.autoConnect = true; // Re-enable AutoConnect if it was paused due to manual disconnection
             }
             if (recentlyLostConnection && autoInitiated && connectResult) {
                 trayManager.ShowNotification("Reconnected", "Sketchbook was able to find it's pencil all on its own!", NIIF_USER);
                 recentlyLostConnection = false;
             }
         });
-
-        
     };
 
     auto disconnect = [&](bool userInitiated = false) {
@@ -342,6 +342,37 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
         }
     };
 
+    auto memFlash = [&]() {
+        flash::AnimeSkinFlashExporter exporter(settings.network.espDrive);
+                
+        // Check if flashable first
+        if (!exporter.isFlashable()) {
+            flashExportStatus = "Drive not flashable (no FLASHABLE marker)";
+        } else {
+            // Clear old files first
+            exporter.clearAssetDirectory();
+            
+            // Use same rotation as frame streaming
+            flash::ExportRotation rotation = settings.preferences.rotate180 
+                ? flash::ExportRotation::RotNeg90 
+                : flash::ExportRotation::Rot90;
+            auto result = exporter.exportSkin(skins[skinName], rotation);
+            if (result.success) {
+                flashExportStatus = "Flash export OK: " + std::to_string(result.exportedFiles.size()) + " files";
+                if (settings.preferences.autoMemFlash) {
+                    settings.preferences.flashMode = true;
+                    flashModeCB.setChecked(true, true);
+                }
+            } else {
+                LOG_WARN << "Flash export failed: " << result.error << "\n";
+                flashExportStatus = "Flash export failed: " + result.error;
+                trayManager.ShowNotification("MemFlash failed", "Sketchbook failed to add stickers onto the board! Check the logs to see why. Flash mode has been switched off.", NIIF_ERROR, true);
+                settings.preferences.flashMode = false;
+                flashModeCB.setChecked(false, true);
+            }
+        }
+    };
+
     auto selectSkin = [&](const std::string& newSkinName) {
         LOG_INFO << "Skin changed from " << settings.preferences.selectedSkin << " to: " << newSkinName << " (" << (skins[newSkinName]->initialized ? "initialized" : "not initialized") << ")\n";
         settings.preferences.selectedSkin = newSkinName;
@@ -354,11 +385,22 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
 
         if (skins[newSkinName]->hasFlashConfig()) {
             LOG_INFO << "New skin supports flash mode. Defaultly enabling flash mode for new skin.\n";
-            flashModeCB.setChecked(true, true);
-            settings.preferences.flashMode = true;
             flash::AnimeSkinFlashExporter tempExporter(settings.network.espDrive);
             if (newSkinName != tempExporter.getLastFlashedSkinName()) {
-                trayManager.ShowNotification("Flash required", "The new skin needs a MemFlash to be drawn properly! Open sketchbook to initiate.", NIIF_USER);
+                if (settings.preferences.autoMemFlash) {
+                    LOG_INFO << "AutoMemFlash is enabled, initiating flash sequence for new skin: " << newSkinName << "\n";
+                    trayManager.ShowNotification("MemFlash initiated", "Sketchbook is adding some stickers to the board. Please give it a second.", NIIF_USER);
+                    memFlash();
+                    flashModeCB.setChecked(true, true);
+                    settings.preferences.flashMode = true;
+                } else {
+                    trayManager.ShowNotification("Flash required", std::string("The new skin recommends a MemFlash to be drawn properly! Open sketchbook to initiate.") + (settings.preferences.flashMode ? " (Flash mode has been switched off)" : ""), NIIF_USER);
+                    flashModeCB.setChecked(false, true);
+                    settings.preferences.flashMode = false;
+                }
+            } else {
+                flashModeCB.setChecked(true, true);
+                settings.preferences.flashMode = true;
             }
         }
     };
@@ -456,6 +498,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
                 if (flashModeInfo.isHovered()) {
                     flashDriveInput.handleEvent(*event, mousePos, *window);
                     settings.network.espDrive = flashDriveInput.value;
+                    autoMemFlashCB.handleEvent(*event, mousePos, *window);
+                    settings.preferences.autoMemFlash = autoMemFlashCB.isChecked();
                 }
                 if (frameLockCB.isChecked()) {
                     realtimeCB.handleEvent(*event, mousePos, *window);
@@ -514,34 +558,14 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
 
             // Handle flash export button
             if (flashBtn.update(mousePos, mousePressed, *window)) {
-                flash::AnimeSkinFlashExporter exporter(settings.network.espDrive);
-                
-                // Check if flashable first
-                if (!exporter.isFlashable()) {
-                    flashExportStatus = "Drive not flashable (no FLASHABLE marker)";
-                } else {
-                    // Clear old files first
-                    exporter.clearAssetDirectory();
-                    
-                    // Use same rotation as frame streaming
-                    flash::ExportRotation rotation = settings.preferences.rotate180 
-                        ? flash::ExportRotation::RotNeg90 
-                        : flash::ExportRotation::Rot90;
-                    auto result = exporter.exportSkin(skins[skinName], rotation);
-                    if (result.success) {
-                        flashExportStatus = "Flash export OK: " + std::to_string(result.exportedFiles.size()) + " files";
-                    } else {
-                        LOG_WARN << "Flash export failed: " << result.error << "\n";
-                        flashExportStatus = "Flash export failed: " + result.error;
-                    }
-                }
+                memFlash();
             }
 
             
-            if (refreshBtn.update(mousePos, mousePressed, *window) || trayManager.ShouldRefreshSkin()) {
+            if (refreshBtn.update(mousePos, mousePressed, *window)) {
                 windowInitiatedSkinRefresh = true; // Defer action until outside window loop to allow it to work if window hasn't been created yet
             }
-            if (resetBoardSettingsBtn.update(mousePos, mousePressed, *window) || trayManager.ShouldResetBoard()) {
+            if (resetBoardSettingsBtn.update(mousePos, mousePressed, *window)) {
                 windowInitiatedReset = true; // Defer action until outside window loop to allow it to work if window hasn't been created yet
             }
             
@@ -679,6 +703,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
         if (pendingModeSync && connected) {
             if (!syncModeToDevice()) {
                 flashExportStatus = "Failed to sync mode to device";
+                LOG_WARN << "Failed to sync mode to device\n";
             }
             pendingModeSync = false;
         }
@@ -917,6 +942,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
             if (flashModeInfo.isHovered()) {
                 flashDriveInput.draw(*window);
                 flashBtn.draw(*window);
+                autoMemFlashCB.draw(*window);
             }
             settingsInfo.draw(*window);
             if (settingsInfo.isHovered()) {
