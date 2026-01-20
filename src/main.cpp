@@ -350,9 +350,12 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
         }
     };
 
-    auto memFlash = [&]() {
+    auto memFlash = [&](bool suppressNotification = false) {
         if (connected) {
             suppressNotifsDuringMemFlash = true;
+        }
+        if (!suppressNotification) {
+            trayManager.ShowNotification("MemFlash initiated", "Sketchbook is adding some stickers. Please give it a second.", NIIF_USER);
         }
         flash::AnimeSkinFlashExporter exporter(settings.network.espDrive);
                 
@@ -400,7 +403,6 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
             if (newSkinName != tempExporter.getLastFlashedSkinName()) {
                 if (settings.preferences.autoMemFlash) {
                     LOG_INFO << "AutoMemFlash is enabled, initiating flash sequence for new skin: " << newSkinName << "\n";
-                    trayManager.ShowNotification("MemFlash initiated", "Sketchbook is adding some stickers to the board. Please give it a second.", NIIF_USER);
                     memFlash();
                     flashModeCB.setChecked(true, true);
                     settings.preferences.flashMode = true;
@@ -558,7 +560,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
 
             // Handle flash export button
             if (flashBtn.update(mousePos, mousePressed, *window)) {
-                memFlash();
+                memFlash(true);
             }
 
             if (refreshBtn.update(mousePos, mousePressed, *window)) {
@@ -690,11 +692,14 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
             // Turn on flash mode with MemFlash
             if (!settings.preferences.flashMode) {
                  LOG_INFO << "Switching to flash mode with MemFlash from tray\n";
-                trayManager.ShowNotification("MemFlash initiated", "Sketchbook is adding some stickers to the board. Please give it a second.", NIIF_USER);
                 memFlash();
                 settings.preferences.flashMode = true;
                 flashModeCB.setChecked(true, true);
             }
+        }
+        if (trayManager.ShouldMemFlash()) {
+            LOG_INFO << "MemFlash triggered from tray\n";
+            memFlash();
         }
         
         // Check async connection result

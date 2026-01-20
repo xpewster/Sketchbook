@@ -27,6 +27,7 @@ enum TrayMenuID {
     MENU_MODE_STREAMING = 7,
     MENU_MODE_FLASH = 8,
     MENU_MODE_FLASH_MEM = 9,
+    MENU_MEMFLASH = 10,
     MENU_SKIN_BASE = 100  // Skin submenu items start at 100
 };
 
@@ -50,6 +51,7 @@ private:
     std::atomic<bool> shouldSetStreamingMode;
     std::atomic<bool> shouldSetFlashMode;
     std::atomic<bool> shouldSetFlashModeMemFlash;
+    std::atomic<bool> shouldMemFlash;
     std::atomic<int> selectedSkinIndex;  // -1 means no selection
     std::atomic<bool> running;
     
@@ -156,6 +158,8 @@ private:
             shouldSetFlashMode = true;
         } else if (cmd == MENU_MODE_FLASH_MEM) {
             shouldSetFlashModeMemFlash = true;
+        } else if (cmd == MENU_MEMFLASH) {
+            shouldMemFlash = true;
         } else if (cmd == MENU_CLOSE) {
             shouldExit = true;
         } else if (cmd >= MENU_SKIN_BASE) {
@@ -192,6 +196,28 @@ private:
         }
         
         SetMenuItemInfo(hMenu, MENU_CONNECT, FALSE, &mii);
+        
+        // Manage MemFlash item based on flash mode state
+        bool isFlashMode = flashModeState.load();
+        
+        // Remove existing MemFlash item if present (by ID)
+        DeleteMenu(hMenu, MENU_MEMFLASH, MF_BYCOMMAND);
+        
+        // Add MemFlash item if flash mode is on
+        if (isFlashMode) {
+            // Find position of "Reset board" and insert before it
+            int menuCount = GetMenuItemCount(hMenu);
+            int insertPos = -1;
+            for (int i = 0; i < menuCount; i++) {
+                if (GetMenuItemID(hMenu, i) == MENU_RESET_BOARD) {
+                    insertPos = i;
+                    break;
+                }
+            }
+            if (insertPos >= 0) {
+                InsertMenuW(hMenu, insertPos, MF_BYPOSITION | MF_STRING, MENU_MEMFLASH, L"MemFlash");
+            }
+        }
         
         // Rebuild mode submenu based on current flash mode state
         RebuildModeMenu();
@@ -374,7 +400,7 @@ public:
           shouldRestore(false), shouldExit(false), shouldConnect(false),
           shouldDisconnect(false), shouldRefreshSkin(false), shouldResetBoard(false),
           shouldToggleFrameLock(false), shouldSetStreamingMode(false),
-          shouldSetFlashMode(false), shouldSetFlashModeMemFlash(false),
+          shouldSetFlashMode(false), shouldSetFlashModeMemFlash(false), shouldMemFlash(false),
           selectedSkinIndex(-1),
           running(false), connectionState(ConnectionState::Disconnected),
           flashModeState(false), frameLockState(false),
@@ -463,6 +489,11 @@ public:
     // Check if user wants to enable flash mode with MemFlash
     bool ShouldSetFlashModeMemFlash() {
         return shouldSetFlashModeMemFlash.exchange(false);
+    }
+    
+    // Check if user clicked top-level MemFlash
+    bool ShouldMemFlash() {
+        return shouldMemFlash.exchange(false);
     }
     
     int GetSelectedSkinIndex() {
