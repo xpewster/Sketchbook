@@ -129,7 +129,7 @@ init_sequence_hd371 = bytes((
 ))
 
 board.I2C().deinit()
-i2c = busio.I2C(board.SCL, board.SDA)
+i2c = busio.I2C(board.SCL, board.SDA, frequency=400_000)
 tft_io_expander = dict(board.TFT_IO_EXPANDER)
 dotclockframebuffer.ioexpander_send_init_sequence(i2c, init_sequence_hd371, **tft_io_expander)
 i2c.deinit()
