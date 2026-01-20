@@ -368,7 +368,8 @@ client_socket = None
 
 frame_count = 0
 fps_start = time.monotonic()
-last_successful_frame_time = time.monotonic()
+last_successful_frame_time = 0
+disconnected_mode = True
 
 while True:
     # Accept new connection
@@ -378,6 +379,7 @@ while True:
             client_socket.setblocking(True)
             client_socket.settimeout(5.0)
             connected = True
+            disconnected_mode = False
             print(f"Client connected from {addr}")
             
             # Set up display for connected mode
@@ -421,15 +423,11 @@ while True:
                     frame_count = 0
                     fps_start = now
                 last_successful_frame_time = time.monotonic()
-            elif time.monotonic() - last_successful_frame_time > 20.0:
+            else:
                 print("Client disconnected")
                 client_socket.close()
                 client_socket = None
                 connected = False
-                last_successful_frame_time = time.monotonic()
-                
-                # Switch back to loading GIF
-                setup_disconnected_display()
                     
         except Exception as e:
             print(f"Error handling client: {e}")
@@ -446,11 +444,23 @@ while True:
     # Idle animation when not connected - always show loading GIF
     if not connected:
         now = time.monotonic()
-        if now - last_frame_time >= FRAME_DELAY:
-            last_frame_time = now
-            
-            if gif:
-                gif.next_frame()
+        if not disconnected_mode:
+            # Only show idle GIF if after sufficient time has passed since last successful frame
+            if last_successful_frame_time > 0 and now - last_successful_frame_time < 30.0:
+                # Keep display responsive
+                flash_mgr.update_bobbing()
+                flash_mgr.advance_animations()
                 display.refresh()
+            else:
+                # Switch back to loading GIF
+                setup_disconnected_display()
+                disconnected_mode = True
+        else:
+            if now - last_frame_time >= FRAME_DELAY:
+                last_frame_time = now
+                
+                if gif:
+                    gif.next_frame()
+                    display.refresh()
     
     time.sleep(0.001)
