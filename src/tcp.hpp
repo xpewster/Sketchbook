@@ -29,6 +29,7 @@ public:
 
 
     bool connect(const std::string& host, const int tcp_port) {
+        LOG_INFO << "TcpConnection::connect starting for " << host << "\n";
         disconnect();
         cancelConnect_ = false;
         
@@ -51,6 +52,7 @@ public:
         
         // Start non-blocking connect
         int result = ::connect(sock_, (sockaddr*)&serverAddr, sizeof(serverAddr));
+        LOG_INFO << "Non-blocking connect returned, entering poll loop\n";
         if (result == SOCKET_ERROR && WSAGetLastError() != WSAEWOULDBLOCK) {
             closesocket(sock_);
             sock_ = INVALID_SOCKET;

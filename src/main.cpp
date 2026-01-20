@@ -405,24 +405,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
         }
     };
 
-    // Helper to send mode selection to remote
-    auto syncModeToDevice = [&]() -> bool {
-        if (!connected) {
-            LOG_WARN << "Cannot sync mode - not connected\n";
-            return false;
-        }
-        
-        LOG_INFO << "Syncing mode to device: " << (settings.preferences.flashMode ? "flash" : "streaming") << "\n";
-        
-        if (sender.sendModeSelection(settings.preferences.flashMode)) {
-            LOG_INFO << "Mode selection sent and acknowledged\n";
-            sender.invalidateDirtyTracker(); // Invalidate dirty tracker to force full redraw in new mode
-            return true;
-        } else {
-            LOG_ERROR << "Failed to send mode selection\n";
-            return false;
-        }
-    };
+    // Async mode selection state
+    bool pendingFlashRevert = false;
+    bool waitingForModeSync = false;
 
     bool running = true;
     while (running) {
@@ -492,6 +477,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
                 frameLockCB.handleEvent(*event, mousePos, *window);
                 settings.preferences.frameLock = frameLockCB.isChecked();
                 flashModeCB.handleEvent(*event, mousePos, *window);
+                if (settings.preferences.flashMode != flashModeCB.isChecked()) { // Check for change without consuming update
+                    pendingFlashRevert = true; // Only revert on ui action
+                }
                 settings.preferences.flashMode = flashModeCB.isChecked();
                 frameLockInfo.handleEvent(*event, mousePos, *window);
                 flashModeInfo.handleEvent(*event, mousePos, *window);
@@ -701,11 +689,25 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
 
         // Handle pending mode sync
         if (pendingModeSync && connected) {
-            if (!syncModeToDevice()) {
-                flashExportStatus = "Failed to sync mode to device";
-                LOG_WARN << "Failed to sync mode to device\n";
-            }
+            sender.queueModeSelection(settings.preferences.flashMode);
+            waitingForModeSync = true;
             pendingModeSync = false;
+        }
+
+        // Check mode sync result
+        if (waitingForModeSync && sender.modeSyncFinished()) {
+            if (sender.getModeSyncResult()) {
+                // Success - nothing special needed
+            } else {
+                LOG_WARN << "Failed to sync mode to device\n";
+                flashExportStatus = "Failed to sync mode to device";
+                if (pendingFlashRevert) {
+                    flashModeCB.setChecked(!settings.preferences.flashMode);
+                    settings.preferences.flashMode = !settings.preferences.flashMode;
+                }
+            }
+            pendingFlashRevert = false;
+            waitingForModeSync = false;
         }
 
         // Disable flash mode checkbox if skin doesn't support it
@@ -723,15 +725,14 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
         // Handle flash mode checkbox
         if (flashModeCB.wasJustUpdated()) {
             if (connected) {
-                if (!syncModeToDevice()) {
-                    // Revert checkbox on failure
-                    flashModeCB.setChecked(!settings.preferences.flashMode);
-                    settings.preferences.flashMode = !settings.preferences.flashMode;
-                    flashExportStatus = "Failed to sync mode to device";
-                }
+                sender.queueModeSelection(settings.preferences.flashMode);
+                waitingForModeSync = true;
             } else {
                 LOG_INFO << "Flash mode changed to " << (flashModeCB.isChecked() ? "enabled" : "disabled") << " but not connected, so deferring sync\n";
             }
+        }
+        if (waitingForModeSync) {
+            flashModeCB.setDisabled(true);
         }
 
         // Update frame lock controller

@@ -38,6 +38,9 @@ public:
         running_ = true;
         sendError_ = false;
         frameConsumed_ = false;
+        pendingModeSelection_ = false;
+        modeSyncFinished_ = false;
+        modeSyncResult_ = false;
         dirtyTracker_.invalidate();  // Reset tracker on new connection
         sendThread_ = std::thread(&FrameSender::sendLoop, this);
     }
@@ -77,6 +80,22 @@ public:
         cv_.notify_one();
     }
     
+    // Queue a mode selection (called from main thread)
+    // Check modeSyncFinished() and getModeSyncResult() for completion
+    void queueModeSelection(bool flashMode) {
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            pendingModeSelection_ = true;
+            pendingModeValue_ = flashMode;
+            modeSyncFinished_ = false;
+            modeSyncResult_ = false;
+        }
+        cv_.notify_one();
+    }
+    
+    bool modeSyncFinished() const { return modeSyncFinished_; }
+    bool getModeSyncResult() const { return modeSyncResult_; }
+    
     // Check if sender is ready for next frame (for frame lock mode)
     bool isReadyForFrame() const {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -95,24 +114,6 @@ public:
         if (!connection_) return false;
         uint8_t cmd = protocol::MSG_RESET;
         return connection_->sendPacket(&cmd, 1);
-    }
-    
-    // Send mode selection to remote
-    // Returns true if mode was sent and ACKed successfully
-    bool sendModeSelection(bool flashMode) {
-        if (!connection_) return false;
-        
-        uint8_t packet[2] = {
-            protocol::MSG_SET_MODE,
-            flashMode ? protocol::MODE_FLASH : protocol::MODE_FULL_STREAMING
-        };
-        
-        if (!connection_->sendPacket(packet, 2)) {
-            return false;
-        }
-        
-        // Wait for ACK
-        return connection_->waitForAck(TIMEOUT_ACK);
     }
 
     void invalidateDirtyTracker() {
@@ -169,9 +170,40 @@ private:
     void sendLoop() {
         while (true) {
             std::unique_lock<std::mutex> lock(mutex_);
-            cv_.wait(lock, [this] { return frameReady_ || !running_; });
+            cv_.wait(lock, [this] { return frameReady_ || pendingModeSelection_ || !running_; });
             
             if (!running_) break;
+            
+            // Handle mode selection first (blocks frames until complete)
+            if (pendingModeSelection_) {
+                bool targetMode = pendingModeValue_;
+                pendingModeSelection_ = false;
+                lock.unlock();
+                
+                LOG_INFO << "Syncing mode to device: " << (targetMode ? "flash" : "streaming") << "\n";
+                
+                uint8_t packet[2] = {
+                    protocol::MSG_SET_MODE,
+                    targetMode ? protocol::MODE_FLASH : protocol::MODE_FULL_STREAMING
+                };
+                
+                bool success = false;
+                if (connection_->sendPacket(packet, 2)) {
+                    success = connection_->waitForAck(TIMEOUT_ACK);
+                }
+                
+                if (success) {
+                    LOG_INFO << "Mode selection sent and acknowledged\n";
+                    // Invalidate dirty tracker to force full redraw in new mode
+                    dirtyTracker_.invalidate();
+                } else {
+                    LOG_ERROR << "Failed to send mode selection\n";
+                }
+                
+                modeSyncResult_ = success;
+                modeSyncFinished_ = true;
+                continue;  // Re-check conditions
+            }
             
             if (frameReady_) {
                 // Copy data while holding lock
@@ -316,6 +348,12 @@ private:
     // Flash mode pending data
     bool flashMode_ = false;
     flash::FlashStatsMessage pendingFlashStats_;
+    
+    // Mode selection state
+    bool pendingModeSelection_ = false;
+    bool pendingModeValue_ = false;
+    std::atomic<bool> modeSyncFinished_{false};
+    std::atomic<bool> modeSyncResult_{false};
     
     // Frame consumed signaling (for frame lock)
     mutable std::mutex consumedMutex_;
