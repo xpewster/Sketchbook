@@ -148,7 +148,10 @@ protected:
                     }
                     LOG_INFO << "Loaded font " << i << ": " << fc.ttfFile << "\n";
                 } else {
-                    LOG_WARN << "Failed to load font: " << fullPath << "\n";
+                    LOG_WARN << "Failed to load font: " << fullPath << ". Using default\n";
+                    fc.font.openFromFile("C:/Windows/Fonts/times.ttf");
+                    fc.font.setSmooth(false);
+                    fc.loaded = true;
                 }
                 
                 // Load font styling parameters
@@ -291,7 +294,7 @@ public:
         for (auto& fc : fontConfigs) {
             if (fc.loaded) return &fc.font;
         }
-        return nullptr;
+        return &defaultFont;
     }
     
     // Get font config by index (for flash export)
