@@ -6,6 +6,7 @@
 #include <vector>
 #include <string>
 #include <mutex>
+#include <functional>
 #include "rc.h"
 #include "log.hpp"
 #include "tcp.hpp"
@@ -54,6 +55,8 @@ private:
     std::atomic<bool> shouldMemFlash;
     std::atomic<int> selectedSkinIndex;  // -1 means no selection
     std::atomic<bool> running;
+
+    std::function<void()> onSessionEnd;
     
     std::atomic<ConnectionState> connectionState;
     std::atomic<bool> flashModeState;
@@ -108,6 +111,19 @@ private:
                     }
                 }
                 break;
+
+            case WM_ENDSESSION:
+                if (wParam == TRUE) {
+                    LOG_INFO << "Session ending, saving settings...\n";
+                    if (onSessionEnd) {
+                        onSessionEnd();
+                    }
+                    shouldExit = true;
+                }
+                return 0;
+
+            case WM_QUERYENDSESSION:
+                return TRUE;
                 
             case WM_DESTROY:
                 KillTimer(hWnd, 1);
@@ -538,6 +554,11 @@ public:
     void SetCurrentSkinIndex(int index) {
         std::lock_guard<std::mutex> lock(skinMutex);
         currentSkinIndex = index;
+    }
+
+    // Set the callback to be invoked on session end (shutdown)
+    void SetSessionEndCallback(std::function<void()> callback) {
+        onSessionEnd = std::move(callback);
     }
 
     // Used for lazy initialization of TrayManager before we have the SFML window handle

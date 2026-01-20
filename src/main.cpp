@@ -419,6 +419,20 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
         }
     };
 
+    // Save and close connection on exit
+    auto saveAndQuit = [&]() {
+        if (pausedAutoConnect) {
+            settings.preferences.autoConnect = true; // Re-enable AutoConnect if we paused it for manual disconnect
+        }
+        settings.save();
+        
+        if (connected) {
+            sender.stop();
+            connection.disconnect();
+        }
+    };
+    trayManager.SetSessionEndCallback(saveAndQuit);
+
     // Async mode selection state
     bool pendingFlashRevert = false;
     bool waitingForModeSync = false;
@@ -1040,20 +1054,11 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
         }
     }
 
-    if (pausedAutoConnect) {
-        settings.preferences.autoConnect = true; // Re-enable AutoConnect if we paused it for manual disconnect
-    }
-    settings.save();
-    
     // Clean shutdown
     if (connectThread.joinable()) {
         connectThread.join();
     }
-    if (connected) {
-        sender.stop();
-        connection.disconnect();
-    }
-    
+    saveAndQuit();
     
     return 0;
 }
