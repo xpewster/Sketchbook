@@ -36,8 +36,10 @@ public:
         
         // Capture post-processing settings from skin
         jpegifyEnabled_ = getParamBool(params, "skin.effects.jpegify.enabled", false);
-        jpegifyQuality_ = getParamInt(params, "skin.effects.jpegify.quality", 30);
+        jpegifyQuality_ = getParamInt(params, "skin.effects.jpegify.quality", 20);
         jpegifyLoadingGif_ = getParamBool(params, "skin.effects.jpegify.loadinggif", false);
+        jpegifyCharacterQuality_ = getParamInt(params, "skin.effects.jpegify.character.quality", jpegifyQuality_);
+        jpegifyWeatherQuality_ = getParamInt(params, "skin.effects.jpegify.weather.quality", jpegifyQuality_);
         
         if (jpegifyEnabled_) {
             LOG_INFO << "Jpegify enabled for flash export, quality=" << jpegifyQuality_ << "\n";
@@ -130,11 +132,13 @@ private:
     bool jpegifyEnabled_ = false;
     int jpegifyQuality_ = 30;
     bool jpegifyLoadingGif_ = false;
+    int jpegifyCharacterQuality_ = 30;
+    int jpegifyWeatherQuality_ = 30;
     
     // Apply post-processing effects to an image (jpegify, etc.)
-    void applyPostProcessing(sf::Image& img, bool overrideJpegify = false) {
+    void applyPostProcessing(sf::Image& img, int jpegifyQuality, bool overrideJpegify = false) {
         if (jpegifyEnabled_ && !overrideJpegify) {
-            JpegifyEffect::applyToImage(img, jpegifyQuality_);
+            JpegifyEffect::applyToImage(img, jpegifyQuality);
         }
     }
     
@@ -308,11 +312,11 @@ private:
             std::string basePath = skinDir + "/" + charFile;
             
             if (animated && frameCount > 1) {
-                if (!exportAnimationToGif(basePath, frameCount, fps, assetDir_ + "character.gif", result, targetW, targetH)) {
+                if (!exportAnimationToGif(basePath, frameCount, fps, assetDir_ + "character.gif", result, targetW, targetH, jpegifyCharacterQuality_)) {
                     return false;
                 }
             } else {
-                if (!exportImageToRGB565(basePath, assetDir_ + "character.r565", result, targetW, targetH)) {
+                if (!exportImageToRGB565(basePath, assetDir_ + "character.r565", result, targetW, targetH, jpegifyCharacterQuality_)) {
                     return false;
                 }
             }
@@ -330,11 +334,11 @@ private:
             std::string basePath = skinDir + "/" + warmFile;
             
             if (animated && frameCount > 1) {
-                if (!exportAnimationToGif(basePath, frameCount, fps, assetDir_ + "character_warm.gif", result, targetW, targetH)) {
+                if (!exportAnimationToGif(basePath, frameCount, fps, assetDir_ + "character_warm.gif", result, targetW, targetH, jpegifyCharacterQuality_)) {
                     return false;
                 }
             } else {
-                if (!exportImageToRGB565(basePath, assetDir_ + "character_warm.r565", result, targetW, targetH)) {
+                if (!exportImageToRGB565(basePath, assetDir_ + "character_warm.r565", result, targetW, targetH, jpegifyCharacterQuality_)) {
                     return false;
                 }
             }
@@ -352,11 +356,11 @@ private:
             std::string basePath = skinDir + "/" + hotFile;
             
             if (animated && frameCount > 1) {
-                if (!exportAnimationToGif(basePath, frameCount, fps, assetDir_ + "character_hot.gif", result, targetW, targetH)) {
+                if (!exportAnimationToGif(basePath, frameCount, fps, assetDir_ + "character_hot.gif", result, targetW, targetH, jpegifyCharacterQuality_)) {
                     return false;
                 }
             } else {
-                if (!exportImageToRGB565(basePath, assetDir_ + "character_hot.r565", result, targetW, targetH)) {
+                if (!exportImageToRGB565(basePath, assetDir_ + "character_hot.r565", result, targetW, targetH, jpegifyCharacterQuality_)) {
                     return false;
                 }
             }
@@ -407,13 +411,13 @@ private:
             
             if (animated && frameCount > 1) {
                 std::string outPath = assetDir_ + outBasenames[i] + ".gif";
-                if (!exportAnimationToGif(basePath, frameCount, fps, outPath, result, targetW, targetH)) {
+                if (!exportAnimationToGif(basePath, frameCount, fps, outPath, result, targetW, targetH, jpegifyWeatherQuality_)) {
                     LOG_WARN << "Warning: could not export animated " << iconKeys[i] << "\n";
                     return false;
                 }
             } else {
                 std::string outPath = assetDir_ + outBasenames[i] + ".r565";
-                if (!exportImageToRGB565(basePath, outPath, result, targetW, targetH)) {
+                if (!exportImageToRGB565(basePath, outPath, result, targetW, targetH, jpegifyWeatherQuality_)) {
                     LOG_WARN << "Warning: could not export " << iconKeys[i] << "\n";
                     return false;
                 }
@@ -515,7 +519,7 @@ private:
     // targetW/targetH: target dimensions before rotation (0 = use original size)
     bool exportAnimationToGif(const std::string& basePath, int frameCount, float fps,
                               const std::string& outPath, ExportResult& result,
-                              int targetW = 0, int targetH = 0) {
+                              int targetW = 0, int targetH = 0, int jpegifyQuality = 30) {
         std::string pathNoExt = basePath.substr(0, basePath.rfind(".png"));
         
         // Load first frame to get dimensions (after resize and rotation)
@@ -533,7 +537,7 @@ private:
         sf::Image firstFrame = rotateImage(resizedFirstFrame);
         
         // Apply post-processing to get accurate dimensions
-        applyPostProcessing(firstFrame);
+        applyPostProcessing(firstFrame, jpegifyQuality);
         
         sf::Vector2u size = firstFrame.getSize();
         int width = size.x;
@@ -565,7 +569,7 @@ private:
             sf::Image frame = rotateImage(resizedFrame);
             
             // Apply post-processing effects
-            applyPostProcessing(frame);
+            applyPostProcessing(frame, jpegifyQuality);
             
             // Convert to RGBA format for gif.h
             const uint8_t* pixels = frame.getPixelsPtr();
@@ -596,7 +600,7 @@ private:
     // Export single image to raw RGB565 format
     // targetW/targetH: target dimensions before rotation (0 = use original size)
     bool exportImageToRGB565(const std::string& inPath, const std::string& outPath,
-                             ExportResult& result, int targetW = 0, int targetH = 0) {
+                             ExportResult& result, int targetW = 0, int targetH = 0, int jpegifyQuality = 30) {
         sf::Image srcImg;
         if (!srcImg.loadFromFile(inPath)) {
             result.error = "Failed to load image: " + inPath;
@@ -610,7 +614,7 @@ private:
         sf::Image img = rotateImage(resizedImg);
         
         // Apply post-processing effects
-        applyPostProcessing(img);
+        applyPostProcessing(img, jpegifyQuality);
         
         sf::Vector2u size = img.getSize();
         uint16_t width = static_cast<uint16_t>(size.x);
