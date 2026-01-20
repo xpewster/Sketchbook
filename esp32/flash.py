@@ -249,6 +249,7 @@ class FlashModeManager:
         3. Weather icons (added/removed dynamically)
         4. Character (if flashed) - on top of stream so character shows over streamed bg
         """
+
         # Clear existing
         while len(group) > 0:
             group.pop()
@@ -261,6 +262,7 @@ class FlashModeManager:
             group.append(self.stream_tilegrid)
         
         # Weather will be added/removed dynamically (on top)
+        self.last_weather_index = -1 # Reset last_weather_index so update_weather_icon can re-add the tilegrid.
 
         if self.char_tilegrid:
             group.append(self.char_tilegrid)
