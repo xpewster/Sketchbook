@@ -149,7 +149,9 @@ protected:
                     LOG_INFO << "Loaded font " << i << ": " << fc.ttfFile << "\n";
                 } else {
                     LOG_WARN << "Failed to load font: " << fullPath << ". Using default\n";
-                    fc.font.openFromFile("C:/Windows/Fonts/times.ttf");
+                    if (!fc.font.openFromFile("C:/Windows/Fonts/times.ttf")) {
+                        LOG_ERROR << "Failed to load default font for fallback\n";
+                    }
                     fc.font.setSmooth(false);
                     fc.loaded = true;
                 }

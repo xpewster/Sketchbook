@@ -91,6 +91,16 @@ public:
     void draw(sf::RenderWindow& window) {
         // Draw main box
         window.draw(box);
+        // Cut off text if too long
+        sf::FloatRect boxBounds = box.getGlobalBounds();
+        sf::FloatRect textBounds = displayText.getGlobalBounds();
+        if (textBounds.size.x > boxBounds.size.x - 20) {
+            std::string str = displayText.getString();
+            while (!str.empty() && displayText.getLocalBounds().size.x > boxBounds.size.x - 20) {
+                str.pop_back();
+                displayText.setString(str + "...");
+            }
+        }
         window.draw(displayText);
         
         // Draw dropdown arrow
@@ -132,7 +142,17 @@ public:
                 optionBox.setOutlineThickness(1);
                 window.draw(optionBox);
                 
+                // Cut off option text if too long
                 sf::Text optionText(font, options[i], 14);
+                sf::FloatRect optionBoxBounds = optionBox.getGlobalBounds();
+                sf::FloatRect optionTextBounds = optionText.getGlobalBounds();
+                if (optionTextBounds.size.x > optionBoxBounds.size.x) {
+                    std::string str = optionText.getString();
+                    while (!str.empty() && optionText.getLocalBounds().size.x > optionBoxBounds.size.x) {
+                        str.pop_back();
+                        optionText.setString(str + "...");
+                    }
+                }
                 optionText.setFillColor(sf::Color::Black);
                 optionText.setPosition(sf::Vector2f(position.x + 4, position.y + itemHeight * (i + 1) + 4));
                 window.draw(optionText);
