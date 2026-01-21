@@ -47,27 +47,39 @@ public:
         
         // Export each enabled layer
         if (flashConfig.isLayerFlashed(FlashLayer::Background)) {
+            LOG_INFO << "Exporting background layer for flash...\n";
             if (!exportBackground(skinDir, params, result)) return result;
+            LOG_INFO << "Background export complete.\n";
         }
         
         if (flashConfig.isLayerFlashed(FlashLayer::Character)) {
+            LOG_INFO << "Exporting character layer for flash...\n";
             if (!exportCharacter(skinDir, params, result)) return result;
+            LOG_INFO << "Character export complete.\n";
         }
         
         if (flashConfig.isLayerFlashed(FlashLayer::WeatherIcon)) {
+            LOG_INFO << "Exporting weather icon layer for flash...\n";
             if (!exportWeatherIcons(skinDir, params, result)) return result;
+            LOG_INFO << "Weather icon export complete.\n";
         }
         
         if (flashConfig.isLayerFlashed(FlashLayer::Text)) {
+            LOG_INFO << "Exporting fonts for flash...\n";
             if (!exportFonts(skin, skinDir, result)) return result;
+            LOG_INFO << "Font export complete.\n";
         }
         
         if (getParamBool(params, "skin.flash.loading", false)) {
+            LOG_INFO << "Exporting loading GIF for flash...\n";
             if (!exportLoadingGif(skinDir, result)) return result;
+            LOG_INFO << "Loading GIF export complete.\n";
         }
         
         // Generate config file
+        LOG_INFO << "Generating config.txt for flash...\n";
         if (!generateConfig(skin, result)) return result;
+        LOG_INFO << "Config generation complete.\n";
         
         result.success = true;
         LOG_INFO << "Flash export complete: " << result.exportedFiles.size() 
@@ -91,10 +103,17 @@ private:
         if (it != params.end() && !it->second.empty()) {
             filename = it->second;
         }
+        if (filename.empty()) {
+            return defaultVal;
+        }
         // Check if filename is a valid file in skin directory
-        if (!filename.empty() && std::filesystem::exists(skinDir + "/" + filename)) {
+        std::string filenameNoExt = filename.substr(0, filename.rfind(".png"));
+        std::string firstFrameFilename = filenameNoExt + ".0.png";
+        bool animated = getParamBool(params, key.substr(0, key.rfind(".png")) + ".animation.enabled", false);
+        if (std::filesystem::exists(skinDir + "/" + filename) || (animated && std::filesystem::exists(skinDir + "/" + firstFrameFilename))) {
             return filename;
         }
+        LOG_INFO << "Filename " << (skinDir + "/" + filename) << " not found (animated file " << (animated ? firstFrameFilename : "N/A") << "), using default: " << defaultVal << "\n";
         return defaultVal;
     }
     
@@ -164,12 +183,19 @@ private:
     }
     
     // Get image dimensions from a PNG file
-    std::pair<int, int> getImageDimensions(const std::string& path) {
+    std::pair<int, int> getImageDimensions(const std::string& path, bool animated = false) {
         sf::Image img;
-        if (img.loadFromFile(path)) {
+        std::string animatedPath = path;
+        if (animated) {
+            // For animated images, check first frame
+            std::string filenameNoExt = path.substr(0, path.rfind(".png"));
+            animatedPath = filenameNoExt + ".0.png";
+        }
+        if (img.loadFromFile(animated ? animatedPath : path)) {
             sf::Vector2u size = img.getSize();
             return { static_cast<int>(size.x), static_cast<int>(size.y) };
         }
+        LOG_INFO << "Failed to load image for dimensions at path: " << (animated ? animatedPath : path) << "\n";
         return { 0, 0 };
     }
     
@@ -520,6 +546,8 @@ private:
     bool exportAnimationToGif(const std::string& basePath, int frameCount, float fps,
                               const std::string& outPath, ExportResult& result,
                               int targetW = 0, int targetH = 0, int jpegifyQuality = 30) {
+        LOG_INFO << "Exporting animation to GIF: " << outPath 
+                 << " (" << frameCount << " frames at " << fps << " FPS)\n";
         std::string pathNoExt = basePath.substr(0, basePath.rfind(".png"));
         
         // Load first frame to get dimensions (after resize and rotation)
@@ -601,6 +629,7 @@ private:
     // targetW/targetH: target dimensions before rotation (0 = use original size)
     bool exportImageToRGB565(const std::string& inPath, const std::string& outPath,
                              ExportResult& result, int targetW = 0, int targetH = 0, int jpegifyQuality = 30) {
+        LOG_INFO << "Exporting image to RGB565: " << outPath << "\n";
         sf::Image srcImg;
         if (!srcImg.loadFromFile(inPath)) {
             result.error = "Failed to load image: " + inPath;
@@ -823,7 +852,7 @@ private:
             // Get character image dimensions for proper position transform
             std::string charFile = getParam(params, "skin.character.png");
             std::string charPath = skin->getBaseSkinDir() + "/" + charFile;
-            auto [charW, charH] = getImageDimensions(charPath);
+            auto [charW, charH] = getImageDimensions(charPath, animated);
             
             // Get original position and transform with sprite size
             float origX = getParamFloat(params, "skin.character.x", 0);
