@@ -21,6 +21,10 @@ All code for both fronts provided.
 - Windows startup and tray hooks
 - Advanced post-processing effects (e.g. jpegify)
 
+## Included skins
+- Sketchbook2 - An early version of the Sketchbook skin
+- Space - Cool space skin
+
 ## Build
 ```
 cmake -B build -DCMAKE_BUILD_TYPE=Release // First time
@@ -31,3 +35,4 @@ cmake --build build --config Release
 
 
 See [attached license](LICENSE). Thank you for your time.
+
