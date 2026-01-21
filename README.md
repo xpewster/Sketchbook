@@ -17,7 +17,7 @@ All code for both fronts provided.
 ![Space skin](https://media0.giphy.com/media/v1.Y2lkPTc5MGI3NjExajhsYXhmbXVqazA2MGF2ZXJ5eWVkeDJhaGo5MXcycDM3NmNlYWFxdyZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/Gpf2Dx5bitiZAbgpYs/giphy.gif)
 
 - Skins (customizable with .xml files)
-- Tunable settings to achieve maximum framerate
+- Tunable settings to achieve maximum framerate. Also utilizes dirty rects to improve throughput.
 - Windows startup and tray hooks
 - Advanced post-processing effects (e.g. jpegify)
 
@@ -35,4 +35,5 @@ cmake --build build --config Release
 
 
 See [attached license](LICENSE). Thank you for your time.
+
 
