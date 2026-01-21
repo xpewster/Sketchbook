@@ -5,7 +5,7 @@ All code for both fronts provided.
 
 ## Features
 <figure>
-    <figcaption><i>"Sketchbook" -- flagship skin of the software.</i></figcaption>
+    <figcaption><i>"Sketchbook" -- flagship skin of the software. Based on the anime "Sketchbook ~full color's~".</i></figcaption>
 </figure>
 
 ![Sketchbook skin](https://media1.giphy.com/media/v1.Y2lkPTc5MGI3NjExMTM2NGxtbGlxcjBsZzk0ZmFxeXV4bTFha243Mm1lMGt3cnB4amF4YiZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/BitQuRCKAdipU2KeSs/giphy.gif)
@@ -35,5 +35,6 @@ cmake --build build --config Release
 
 
 See [attached license](LICENSE). Thank you for your time.
+
 
 
