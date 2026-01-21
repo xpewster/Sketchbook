@@ -9,3 +9,4 @@ _deps/
 out
 settings.toml
 test/
+DEVELOPMENT.md
