@@ -9,6 +9,8 @@ All code for both fronts provided.
          alt="Sketchbook skin">
     <figcaption><i>"Sketchbook" -- flagship skin of the software.</i></figcaption>
 </figure>
+
+
 <figure>
     <img src="https://media0.giphy.com/media/v1.Y2lkPTc5MGI3NjExajhsYXhmbXVqazA2MGF2ZXJ5eWVkeDJhaGo5MXcycDM3NmNlYWFxdyZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/Gpf2Dx5bitiZAbgpYs/giphy.gif"
          alt="Space skin">
