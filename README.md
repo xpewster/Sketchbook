@@ -30,11 +30,13 @@ All code for both fronts provided.
 cmake -B build -DCMAKE_BUILD_TYPE=Release // First time
 cmake --build build --config Release
 ```
+Currently only supports Windows. Temperature is supported by Ryzen-specific APIs. Also, display width and height are hardcoded and will need to be updated before build.
 
 ## License
 
 
 See [attached license](LICENSE). Thank you for your time.
+
 
 
 
