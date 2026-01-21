@@ -654,7 +654,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
         if (windowInitiatedSkinRefresh || trayManager.ShouldRefreshSkin()) {
             // Force refresh skin parameters
             for (auto& pair : skins) {
-                if (pair.second->initialized) {
+                if (pair.second->initialized && skinName == pair.first) {
                     pair.second->initialize(pair.second->xmlFilePath);
                 }
             }
