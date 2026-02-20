@@ -32,10 +32,13 @@ cmake --build build --config Release
 ```
 Currently only supports Windows. Temperature is supported by Ryzen-specific APIs. Also, display width and height are hardcoded (960x240) and will need to be updated before build.
 
+If the display is unstable, try increasing the heap start size via `CIRCUITPY_HEAP_START_SIZE = 32768` in the settings.toml file.
+
 ## License
 
 
 See [attached license](LICENSE). Thank you for your time.
+
 
 
 
