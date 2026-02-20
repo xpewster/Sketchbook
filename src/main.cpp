@@ -290,6 +290,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
     std::string connectingIP;
     sf::Clock ellipsisClock;
     sf::Clock logFlushClock;
+    sf::Clock hourlyStatsClock;
     sf::Clock lastConnectAttemptClock;
     bool firstConnectionAttempt = true; // Allow immediate first attempt without waiting
     bool pendingModeSync = false; // Track if we need to send mode selection after connection
@@ -1051,6 +1052,17 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
         if (!window.has_value()) {
             // Sleep briefly to avoid busy loop when window is not open. When the window is open, this is handled by the framerate limit
             std::this_thread::sleep_for(std::chrono::milliseconds(33));
+        }
+
+        // Log session stats every half hour
+        if (connected && hourlyStatsClock.getElapsedTime().asSeconds() >= 1800.0f) {
+            LOG_INFO << std::format("Session stats | Duration: {:.1f}m | Frames: {} | Avg FPS: {:.2f} | Avg dirty: {:.1f}% | Total dirty rects: {}\n",
+                sender.getSessionDuration() / 60.0,
+                sender.getTotalFramesSent(),
+                sender.getSessionFPS(),
+                sender.getAverageDirtyRatio() * 100.0,
+                sender.getTotalDirtyRects());
+            hourlyStatsClock.restart();
         }
     }
 

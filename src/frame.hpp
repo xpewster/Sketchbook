@@ -41,6 +41,10 @@ public:
         pendingModeSelection_ = false;
         modeSyncFinished_ = false;
         modeSyncResult_ = false;
+        totalFramesSent_ = 0;
+        totalDirtyRects_ = 0;
+        totalDirtyRatioSum_ = 0.0;
+        sessionStart_ = std::chrono::steady_clock::now();
         dirtyTracker_.invalidate();  // Reset tracker on new connection
         sendThread_ = std::thread(&FrameSender::sendLoop, this);
     }
@@ -163,6 +167,27 @@ public:
         return lastDirtyRects_;
     }
     
+    // Session-wide stats
+    uint64_t getTotalFramesSent() const { return totalFramesSent_; }
+    uint64_t getTotalDirtyRects() const { return totalDirtyRects_; }
+    
+    double getAverageDirtyRatio() const {
+        std::lock_guard<std::mutex> lock(statsMutex_);
+        uint64_t frames = totalFramesSent_;
+        return frames > 0 ? totalDirtyRatioSum_ / frames : 0.0;
+    }
+    
+    double getSessionFPS() const {
+        auto elapsed = std::chrono::duration<double>(
+            std::chrono::steady_clock::now() - sessionStart_).count();
+        return elapsed > 0.0 ? totalFramesSent_ / elapsed : 0.0;
+    }
+    
+    double getSessionDuration() const {
+        return std::chrono::duration<double>(
+            std::chrono::steady_clock::now() - sessionStart_).count();
+    }
+    
     bool hadError() const { return sendError_; }
     void clearError() { sendError_ = false; }
     
@@ -270,6 +295,8 @@ private:
             lastRectCount_ = stats.rectCount;
             lastPacketSize_ = packet.size();
             lastDirtyRects_ = rects;
+            totalDirtyRects_ += rects.size();
+            totalDirtyRatioSum_ += stats.compressionRatio;
         }
         
         return connection_->sendPacket(packet.data(), packet.size());
@@ -326,6 +353,8 @@ private:
             lastRectCount_ = rectCount;
             lastPacketSize_ = packet.size();
             lastDirtyRects_ = rects;
+            totalDirtyRects_ += rectCount;
+            totalDirtyRatioSum_ += lastCompressionRatio_;
         }
         
         return connection_->sendPacket(packet.data(), packet.size());
@@ -334,6 +363,7 @@ private:
     void recordFrameSent() {
         std::lock_guard<std::mutex> lock(fpsMutex_);
         frameTimestamps_.push_back(std::chrono::steady_clock::now());
+        ++totalFramesSent_;
     }
     
     TcpConnection* connection_ = nullptr;
@@ -367,10 +397,14 @@ private:
     const int fpsWindow_;
     mutable std::mutex fpsMutex_;
     mutable std::deque<std::chrono::steady_clock::time_point> frameTimestamps_;
+    std::atomic<uint64_t> totalFramesSent_{0};
+    std::chrono::steady_clock::time_point sessionStart_;
     
     // Stats
     mutable std::mutex statsMutex_;
     float lastCompressionRatio_ = 1.0f;
     int lastRectCount_ = 0;
     size_t lastPacketSize_ = 0;
+    std::atomic<uint64_t> totalDirtyRects_{0};
+    double totalDirtyRatioSum_ = 0.0;  // Protected by statsMutex_
 };
