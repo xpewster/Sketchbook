@@ -26,7 +26,7 @@ constexpr int TIMEOUT_ACK = 20000; // ms
 class FrameSender {
 public:
     FrameSender(int fpsWindow = 10) 
-        : running_(false), frameReady_(false), sendError_(false), fpsWindow_(fpsWindow),
+        : running_(false), frameReady_(false), sendError_(false), sendErrorMsg_(""), fpsWindow_(fpsWindow),
           frameConsumed_(false) {}
     
     ~FrameSender() {
@@ -37,6 +37,7 @@ public:
         connection_ = conn;
         running_ = true;
         sendError_ = false;
+        sendErrorMsg_ = "";
         frameConsumed_ = false;
         pendingModeSelection_ = false;
         modeSyncFinished_ = false;
@@ -124,6 +125,10 @@ public:
         dirtyTracker_.invalidate();
     }
     
+    void configureDirtyRects(const qualia::DirtyRectConfig& config) {
+        dirtyTracker_.configure(config);
+    }
+    
     // Get current FPS (thread-safe)
     double getFPS() const {
         std::lock_guard<std::mutex> lock(fpsMutex_);
@@ -188,8 +193,18 @@ public:
             std::chrono::steady_clock::now() - sessionStart_).count();
     }
     
+    void resetSessionStats() {
+        std::lock_guard<std::mutex> lock(fpsMutex_);
+        frameTimestamps_.clear();
+        totalFramesSent_ = 0;
+        sessionStart_ = std::chrono::steady_clock::now();
+        totalDirtyRects_ = 0;
+        totalDirtyRatioSum_ = 0.0;
+    }
+    
     bool hadError() const { return sendError_; }
     void clearError() { sendError_ = false; }
+    std::string getErrorMessage() const { return sendErrorMsg_; }
     
 private:
     void sendLoop() {
@@ -268,6 +283,7 @@ private:
                             std::lock_guard<std::mutex> l(mutex_);
                             frameReady_ = false;  // Clear so we don't retry
                         }
+                        sendErrorMsg_ = "ACK timeout";
                     }
                 } else {
                     sendError_ = true;
@@ -275,6 +291,7 @@ private:
                         std::lock_guard<std::mutex> l(mutex_);
                         frameReady_ = false;  // Clear so we don't retry
                     }
+                    sendErrorMsg_ = "Failed to send frame data";
                 }
             }
         }
@@ -349,7 +366,8 @@ private:
         // Update stats
         {
             std::lock_guard<std::mutex> slock(statsMutex_);
-            lastCompressionRatio_ = (float)rectCount / 100.0f;  // Rough indicator
+            auto stats = dirtyTracker_.getLastStats(rects);
+            lastCompressionRatio_ = stats.compressionRatio;
             lastRectCount_ = rectCount;
             lastPacketSize_ = packet.size();
             lastDirtyRects_ = rects;
@@ -374,6 +392,7 @@ private:
     std::atomic<bool> running_;
     std::atomic<bool> frameReady_;
     std::atomic<bool> sendError_;
+    std::string sendErrorMsg_;
     
     // Flash mode pending data
     bool flashMode_ = false;

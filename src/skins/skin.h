@@ -7,6 +7,7 @@
 
 #include "../log.hpp"
 #include "../system_stats.h"
+#include "../dirty_rects.hpp"
 #include "../utils/xml.h"
 #include "../weather.hpp"
 #include "../train.hpp"
@@ -81,6 +82,9 @@ protected:
     
     // Flash mode
     FlashConfig flashConfig;
+    
+    // Dirty rect config
+    qualia::DirtyRectConfig dirtyRectConfig;
     
     // Temperature thresholds
     float warmThreshold = 60.0f;
@@ -250,6 +254,30 @@ protected:
         }
     }
 
+    void loadDirtyRectConfig() {
+        dirtyRectConfig = qualia::DirtyRectConfig{};  // Reset to defaults
+        
+        auto tryInt = [&](const std::string& key, int& out) {
+            auto it = parameters.find(key);
+            if (it != parameters.end()) {
+                try { out = std::stoi(it->second); } catch (...) {}
+            }
+        };
+        auto tryFloat = [&](const std::string& key, float& out) {
+            auto it = parameters.find(key);
+            if (it != parameters.end()) {
+                try { out = std::stof(it->second); } catch (...) {}
+            }
+        };
+        
+        tryInt("skin.dirtyrects.tile_width", dirtyRectConfig.tileWidth);
+        tryInt("skin.dirtyrects.tile_height", dirtyRectConfig.tileHeight);
+        tryInt("skin.dirtyrects.offset_x", dirtyRectConfig.offsetX);
+        tryInt("skin.dirtyrects.offset_y", dirtyRectConfig.offsetY);
+        tryInt("skin.dirtyrects.max_rects", dirtyRectConfig.maxRects);
+        tryFloat("skin.dirtyrects.full_frame_threshold", dirtyRectConfig.fullFrameThreshold);
+    }
+
 public:
     std::string name;
     std::string xmlFilePath;
@@ -280,6 +308,7 @@ public:
         loadFlashConfig();
         loadFonts();
         loadEffectsConfig();
+        loadDirtyRectConfig();
         parametersRefreshed = true;
         initialized = true;
         return 0;
@@ -344,6 +373,9 @@ public:
     float getWarmThreshold() const { return warmThreshold; }
     float getHotThreshold() const { return hotThreshold; }
     bool getThresholdsUsingPercentage() const { return thresholdsUsingPercentage; }
+    
+    // Get dirty rect configuration
+    const qualia::DirtyRectConfig& getDirtyRectConfig() const { return dirtyRectConfig; }
 
     // Original draw method - uses internal frame counter
     virtual void draw(sf::RenderTexture& texture, SystemStats& stats, WeatherData& weather, TrainData& train) = 0;

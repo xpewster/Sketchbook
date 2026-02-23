@@ -188,6 +188,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
     // TCP connection and sender thread
     TcpConnection connection;
     FrameSender sender;
+    sender.configureDirtyRects(skins[skinName]->getDirtyRectConfig());
     bool connected = false;
     
     // Frame lock controller
@@ -418,6 +419,10 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
                 settings.preferences.flashMode = true;
             }
         }
+        
+        sender.configureDirtyRects(skins[newSkinName]->getDirtyRectConfig());
+        sender.resetSessionStats();
+        LOG_INFO << "Resetting session stats on skin change\n";
     };
 
     // Save and close connection on exit
@@ -614,7 +619,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
         
         // Check for send errors from background thread
         if (connected && sender.hadError()) {
-            LOG_INFO << "Sender thread reported an error. Disconnecting...\n";
+            LOG_INFO << "Sender thread reported an error: " << sender.getErrorMessage() << ". Disconnecting...\n";
             sender.stop();
             connection.disconnect();
             connected = false;
@@ -663,6 +668,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
             loadSkins();
             skinDropdown.setOptions(skinOptions);
             skinDropdown.setSelectedIndex(defaultSkinIndex); // Reuse defaultSkinIndex (updated in lambda)
+            sender.configureDirtyRects(skins[skinName]->getDirtyRectConfig());
+            sender.resetSessionStats();
+            LOG_INFO << "Resetting session stats on skin refresh\n";
         }
         if (windowInitiatedReset || trayManager.ShouldResetBoard()) {
             if (connected) {
