@@ -5,6 +5,7 @@
 #include <atomic>
 #include <condition_variable>
 #include <deque>
+#include <unordered_set>
 
 // Protocol message types
 namespace protocol {
@@ -299,10 +300,10 @@ private:
     
     bool sendNormalFrame(const qualia::Image& frame) {
         // Find dirty rectangles
-        auto rects = dirtyTracker_.findDirtyRects(frame);
+        auto [rects, rleEscapeColor] = dirtyTracker_.findDirtyRects(frame);
         
         // Build packet with dirty rect protocol
-        std::vector<uint8_t> packet = dirtyTracker_.buildPacket(frame, rects);
+        std::vector<uint8_t> packet = dirtyTracker_.buildPacket(frame, rects, rleEscapeColor);
         
         // Update stats
         {
@@ -315,6 +316,17 @@ private:
             totalDirtyRects_ += rects.size();
             totalDirtyRatioSum_ += stats.compressionRatio;
         }
+
+        // // Print 5th frame in one line for debugging
+        // if (totalFramesSent_ >= 4 && !printedDebugFrame && packet.size() > 1000) {
+        //     // std::string hexString;
+        //     // for (size_t i = 0; i < packet.size() && i < 100000; i++) {
+        //     //     hexString += std::format("{:02X}", packet[i]);
+        //     // }
+        //     // LOG_DEBUG << "Debug: Packet data for 5th frame (size: " << packet.size() << "): " << hexString << "\n";
+        //     countRuns(packet);
+        //     printedDebugFrame = true;
+        // }
         
         return connection_->sendPacket(packet.data(), packet.size());
     }
@@ -322,7 +334,7 @@ private:
     bool sendFlashUpdate(const flash::FlashStatsMessage& stats,
                          const qualia::Image& frame) {
         // Find dirty rects using normal comparison
-        auto rects = dirtyTracker_.findDirtyRects(frame);
+        auto [rects, rleEscapeColor] = dirtyTracker_.findDirtyRects(frame);
         
         // Build flash stats header
         uint8_t rectCount = min((size_t)255, rects.size());
@@ -426,4 +438,5 @@ private:
     size_t lastPacketSize_ = 0;
     std::atomic<uint64_t> totalDirtyRects_{0};
     double totalDirtyRatioSum_ = 0.0;  // Protected by statsMutex_
+    bool printedDebugFrame = false;
 };

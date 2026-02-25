@@ -86,6 +86,17 @@ public:
                 preferences.startMinimized = (*prefTable)["start_minimized"].value_or(false);
                 preferences.autoMemFlash = (*prefTable)["auto_mem_flash"].value_or(false);
             }
+            LOG_INFO << "Loaded preferences: selectedSkin=" << preferences.selectedSkin 
+                     << ", rotate180=" << preferences.rotate180
+                     << ", showDirtyRects=" << preferences.showDirtyRects
+                     << ", frameLock=" << preferences.frameLock
+                     << ", flashMode=" << preferences.flashMode
+                     << ", frameLockRealTimePreview=" << preferences.frameLockRealTimePreview
+                     << ", closeToTray=" << preferences.closeToTray
+                     << ", autoConnect=" << preferences.autoConnect
+                     << ", startMinimized=" << preferences.startMinimized
+                     << ", autoMemFlash=" << preferences.autoMemFlash
+                     << "\n";
             
             // Parse weather settings
             if (auto weatherTable = config["weather"].as_table()) {
@@ -94,6 +105,11 @@ public:
                 weather.longitude = (*weatherTable)["OWM_LON"].value_or(-122.3321);
                 weather.units = (*weatherTable)["OWM_UNITS"].value_or("imperial");
             }
+            LOG_INFO << "Loaded weather settings: apiKey " << (weather.apiKey.empty() ? "NOT SET" : "SET") 
+                     << ", latitude=" << weather.latitude 
+                     << ", longitude=" << weather.longitude 
+                     << ", units=" << weather.units 
+                     << "\n";
             
             // Parse display settings
             // if (auto displayTable = config["display"].as_table()) {
@@ -109,6 +125,10 @@ public:
                 network.espPort = (*networkTable)["esp_port"].value_or(8080);
                 network.espDrive = (*networkTable)["esp_drive"].value_or("");
             }
+            LOG_INFO << "Loaded network settings: espIP=" << network.espIP 
+                     << ", espPort=" << network.espPort 
+                     << ", espDrive=" << (network.espDrive.empty() ? "NOT SET" : network.espDrive) 
+                     << "\n";
 
             if (auto trainTable = config["train"].as_table()) {
                 train.apiKey = (*trainTable)["api_key"].value_or("");
@@ -116,6 +136,11 @@ public:
                 train.stopId1 = (*trainTable)["stop_id_1"].value_or("");
                 train.apiBase = (*trainTable)["api_base"].value_or("");
             }
+            LOG_INFO << "Loaded train settings: apiKey " << (train.apiKey.empty() ? "NOT SET" : "SET") 
+                     << ", stopId0=" << train.stopId0 
+                     << ", stopId1=" << train.stopId1 
+                     << ", apiBase=" << train.apiBase 
+                     << "\n";
             
             LOG_INFO << "Settings loaded successfully from: " << settingsPath << "\n";
             return true;

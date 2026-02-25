@@ -1074,6 +1074,14 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
         }
     }
 
+    // Log final session stats
+    LOG_INFO << std::format("Final session stats | Duration: {:.1f}m | Frames: {} | Avg FPS: {:.2f} | Avg dirty: {:.1f}% | Total dirty rects: {}\n",
+        sender.getSessionDuration() / 60.0,
+        sender.getTotalFramesSent(),
+        sender.getSessionFPS(),
+        sender.getAverageDirtyRatio() * 100.0,
+        sender.getTotalDirtyRects());
+
     // Clean shutdown
     if (connectThread.joinable()) {
         connectThread.join();
