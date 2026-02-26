@@ -189,6 +189,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
     TcpConnection connection;
     FrameSender sender;
     sender.configureDirtyRects(skins[skinName]->getDirtyRectConfig());
+    sender.setRLEEnabled(settings.network.rleEnabled);
+    sender.setColorMode(settings.network.colorMode);
     bool connected = false;
     
     // Frame lock controller
@@ -210,11 +212,14 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
     TextInput ipInput(10, 8, 120, 24, settings.network.espIP, font);
     Button connectBtn(140, 8, 90, 24, "Connect", font);
     connectBtn.setColor(sf::Color(100, 255, 100), sf::Color(150, 255, 150));
+
     DropdownSelector skinDropdown(240, 8, 120, 24, skinOptions, font, defaultSkinIndex);
+
     Button refreshBtn(370, 8, 24, 24, "", font);
     sf::Texture refreshIconTexture;
     refreshBtn.setColor(sf::Color(252, 186, 3), sf::Color(252, 205, 76));
     refreshBtn.setIcon("resources/Refresh.png", 0, 0, 24, 24);
+    
     Checkbox frameLockCB(400, 8, 12, "Frame lock", font, 4, -2, settings.preferences.frameLock);
     InfoIcon frameLockInfo(485, 8, 15, "resources/Info.png", "When enabled, the sender thread will wait for the remote device to finish processing each frame before progressing the animation. This prevents frame drops at the expense of possibly slower animation.", font);
     Checkbox flashModeCB(400, 24, 12, "Flash mode", font, 4, -2, settings.preferences.flashMode);
@@ -228,12 +233,26 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
     Checkbox autoMemFlashCB(450, 222, 12, "Auto on skin change", font, 4, -2, settings.preferences.autoMemFlash);
     flashModeInfo.setExtraHeight(48);
     flashModeInfo.enableHoverOverBox(true);
+
+    sf::Text compressionLabel(font, "Compression", 14);
+    compressionLabel.setPosition({502, 6});
+    compressionLabel.setFillColor(sf::Color::Black);
+    InfoIcon compressionInfo(579, 8, 15, "resources/Settings.png", "Compression settings", font);
+    compressionInfo.setExtraHeight(150);
+    compressionInfo.enableHoverOverBox(true);
+    Checkbox rleCompressionCB(498, 64, 12, "Run-length encoding", font, 4, -2, settings.network.rleEnabled);
+    DropdownSelector colorModeDropdown(498, 84, 120, 24, {"RGB565", "RGB444", "RGB343", "RGB332"}, font, static_cast<int>(settings.network.colorMode));
+    sf::Text colorModeLabel(font, "ColorMode", 14);
+    colorModeLabel.setPosition({620, 88});
+    colorModeLabel.setFillColor(sf::Color::Black);
+
     Checkbox realtimeCB((float)(windowWidth - 280), (float)(windowHeight - 22), 12, "Real-time preview", font, 4, -2, settings.preferences.frameLockRealTimePreview);
     realtimeCB.setLabelColor(sf::Color::White);
     float previewCompositeCBX0 = (float)(windowWidth - 410);
     float previewCompositeCBX1 = (float)(windowWidth - 280);
     Checkbox previewCompositeCB(previewCompositeCBX0, (float)(windowHeight - 22), 12, "Preview composite", font, 4, -2, true);
     previewCompositeCB.setLabelColor(sf::Color::White);
+
     InfoIcon settingsInfo((float)(windowWidth - 50), 10, 15, "resources/Settings.png", "Settings", font, InfoBoxDirection::Left);
     settingsInfo.setExtraHeight(130);
     settingsInfo.enableHoverOverBox(true);
@@ -508,6 +527,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
                 }
                 dirtyRectCB.handleEvent(*event, mousePos, *window);
                 settings.preferences.showDirtyRects = dirtyRectCB.isChecked();
+
                 frameLockCB.handleEvent(*event, mousePos, *window);
                 settings.preferences.frameLock = frameLockCB.isChecked();
                 flashModeCB.handleEvent(*event, mousePos, *window);
@@ -532,6 +552,22 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
                     previewCompositeCB.handleEvent(*event, mousePos, *window);
                     skins[skinName]->getFlashConfig().previewComposite = previewCompositeCB.isChecked();
                 }
+
+                compressionInfo.handleEvent(*event, mousePos, *window);
+                if (compressionInfo.isHovered()) {
+                    rleCompressionCB.handleEvent(*event, mousePos, *window);
+                    if (rleCompressionCB.wasJustUpdated()) {
+                        settings.network.rleEnabled = rleCompressionCB.isChecked();
+                        sender.setRLEEnabled(settings.network.rleEnabled);
+                    }
+                    colorModeDropdown.handleEvent(*event, mousePos, *window);
+                    auto newColor = static_cast<ColorMode>(colorModeDropdown.getSelectedIndex());
+                    if (newColor != settings.network.colorMode) {
+                        sender.setColorMode(newColor);
+                        settings.network.colorMode = newColor;
+                    }
+                }
+
                 settingsInfo.handleEvent(*event, mousePos, *window);
                 if (settingsInfo.isHovered()) {
                     startupSettingCB.handleEvent(*event, mousePos, *window);
@@ -859,11 +895,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
                         skins[skinName]->draw(lockedTexture, stats, weather, train, lockedAnimTime);
                     }
                     sendClock.restart();
-                    if (settings.preferences.rotate180) {
-                        textureToRGB565RotNeg90(lockedTexture, frameBuffer);
-                    } else {
-                        textureToRGB565Rot90(lockedTexture, frameBuffer);
-                    }
+                    textureToRGB(lockedTexture, frameBuffer, settings.network.colorMode, settings.preferences.rotate180);
                     
                     if (isFlashModeActive) {
                         auto flashStats = flash::buildFlashStats(stats, weather, train, skins[skinName]);
@@ -889,11 +921,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
                                                        flashedLayers, FLASH_TRANSPARENT_COLOR);
                     }
                     sendClock.restart();
-                    if (settings.preferences.rotate180) {
-                        textureToRGB565RotNeg90(qualiaTexture, frameBuffer);
-                    } else {
-                        textureToRGB565Rot90(qualiaTexture, frameBuffer);
-                    }
+                    textureToRGB(qualiaTexture, frameBuffer, settings.network.colorMode, settings.preferences.rotate180);
                     
                     if (isFlashModeActive) {
                         auto flashStats = flash::buildFlashStats(stats, weather, train, skins[skinName]);
@@ -932,11 +960,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
                                                    flashedLayers, FLASH_TRANSPARENT_COLOR);
                 }
                 sendClock.restart();
-                if (settings.preferences.rotate180) {
-                    textureToRGB565RotNeg90(qualiaTexture, frameBuffer);
-                } else {
-                    textureToRGB565Rot90(qualiaTexture, frameBuffer);
-                }
+                textureToRGB(qualiaTexture, frameBuffer, settings.network.colorMode, settings.preferences.rotate180);
                 
                 if (isFlashModeActive) {
                     auto flashStats = flash::buildFlashStats(stats, weather, train, skins[skinName]);
@@ -1023,6 +1047,14 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
                 flashBtn.draw(*window);
                 autoMemFlashCB.draw(*window);
             }
+            window->draw(compressionLabel);
+            compressionInfo.draw(*window);
+            if (compressionInfo.isHovered()) {
+                rleCompressionCB.draw(*window);
+                colorModeDropdown.draw(*window);
+                window->draw(colorModeLabel);
+            }
+
             settingsInfo.draw(*window);
             if (settingsInfo.isHovered()) {
                 startupSettingCB.draw(*window);

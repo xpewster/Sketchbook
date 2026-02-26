@@ -6,6 +6,9 @@
 #include <algorithm>
 #include <cstdint>
 #include "log.hpp"
+#include "utils/bit.h"
+#include "utils/rgb565.h"
+#include <format>
 
 namespace qualia {
 
@@ -52,10 +55,12 @@ struct DirtyRect {
 //   [1 byte]  message type
 //   If MSG_DIRTY_RECTS:
 //     [1 byte]  rect count
-//     [2 bytes] rle escape color (only if run-length encoding is used)
+//     [1 byte]  color mode (0=RGB565, 1=RGB444, 2=RGB343, 3=RGB332)
+//     [2 bytes] rle escape color
 //     [12 bytes per rect] x, y, w, h as uint16_t little-endian + runLengthEncodingSize as uint32_t little-endian (0 if not run-length encoded)
 //     [pixel data for each rect in sequence]
 //   If MSG_FULL_FRAME:
+//     [1 byte]  color mode (0=RGB565, 1=RGB444, 2=RGB343, 3=RGB332)
 //     [raw pixel data]
 //   If MSG_NO_CHANGE:
 //     (no additional data)
@@ -149,14 +154,14 @@ public:
 
         uint16_t escapeColor = DEFAULT_RLE_ESCAPE_COLOR;
         if (shouldRecalculateRLEEscapeCode) {
-            escapeColor = getRLEEscapeColor(currentFrame);
+            escapeColor = getRLEEscapeColor(currentFrame); // TODO: account for color mode when calculating escape color (e.g. if using RGB332, we need to find an escape color that is rare within the reduced 3-3-2 bit palette)
         }
         
         return {rects, escapeColor};
     }
     
     // Build packet with dirty rect header and pixel data
-    std::vector<uint8_t> buildPacket(const Image& frame, const std::vector<DirtyRect>& rects, uint16_t rleEscapeColor = DEFAULT_RLE_ESCAPE_COLOR) {
+    std::vector<uint8_t> buildPacket(const Image& frame, const std::vector<DirtyRect>& rects, bool rleEnabled, uint16_t rleEscapeColor = DEFAULT_RLE_ESCAPE_COLOR, ColorMode colorMode = ColorMode::RGB565) {
         std::vector<uint8_t> packet;
         
         if (rects.empty()) {
@@ -172,13 +177,36 @@ public:
         
         if (isFullFrame) {
             packet.push_back(MSG_FULL_FRAME);
+            packet.push_back(static_cast<uint8_t>(colorMode));
             // Append raw pixel data
             const uint8_t* data = frame.data();
-            packet.insert(packet.end(), data, data + frame.dataSize());
+            if (colorMode == ColorMode::RGB565) {
+                packet.insert(packet.end(), data, data + frame.dataSize());
+            } else {
+                appendRectPixels(packet, frame, {0, 0, (uint16_t)DISPLAY_WIDTH, (uint16_t)DISPLAY_HEIGHT}, false, rleEscapeColor, colorMode);
+            }
         } else {
             packet.push_back(MSG_DIRTY_RECTS);
             packet.push_back(static_cast<uint8_t>(rects.size()));
-            appendU16(packet, rleEscapeColor);
+            packet.push_back(static_cast<uint8_t>(colorMode));
+            uint16_t adjustedRleEscapeColor = rleEscapeColor;
+            // If using a more compact color mode, we need to adjust the escape color to fit within the reduced bit depth
+            if (rleEnabled && colorMode != ColorMode::RGB565) {
+                switch (colorMode) {
+                    case ColorMode::RGB444:
+                        adjustedRleEscapeColor = rgb444(((rleEscapeColor >> 11) & 0x1F) << 3, ((rleEscapeColor >> 5) & 0x3F) << 2, (rleEscapeColor & 0x1F) << 3);
+                        break;
+                    case ColorMode::RGB343:
+                        adjustedRleEscapeColor = rgb343(((rleEscapeColor >> 11) & 0x1F) << 3, ((rleEscapeColor >> 5) & 0x3F) << 2, (rleEscapeColor & 0x1F) << 3);
+                        break;
+                    case ColorMode::RGB332:
+                        adjustedRleEscapeColor = rgb332(((rleEscapeColor >> 11) & 0x1F) << 3, ((rleEscapeColor >> 5) & 0x3F) << 2, (rleEscapeColor & 0x1F) << 3);
+                        break;
+                    default:
+                        break;
+                }
+            }
+            appendU16(packet, adjustedRleEscapeColor);
             
             // Write rect headers
             for (const auto& rect : rects) {
@@ -190,7 +218,7 @@ public:
             
             // Write pixel data for each rect
             for (const auto& rect : rects) {
-                appendRectPixels(packet, frame, rect, rleEscapeColor);
+                appendRectPixels(packet, frame, rect, rleEnabled, adjustedRleEscapeColor, colorMode);
             }
         }
 
@@ -234,6 +262,7 @@ private:
     Image prevFrame_;
     std::vector<bool> dirtyTiles_;
     bool hasReference_;
+    bool debugHasPrintedFirst_ = false;
     
     // Runtime config
     DirtyRectConfig config_;
@@ -367,7 +396,9 @@ private:
             bool found = false;
             for (int y = 0; y < frame.height; ++y) {
                 for (int x = 0; x < frame.width; ++x) {
-                    if (frame.at(x, y) == c) {
+                    Pixel p = frame.at(x, y);
+                    // Compare in RGB332 space since that's the most compact mode we support, so it has the highest chance of conflicts. P should already be in the correct format
+                    if (p == rgb332((c >> 11) & 0x1F, (c >> 5) & 0x3F, c & 0x1F)) {
                         found = true;
                         break;
                     }
@@ -396,76 +427,128 @@ private:
         packet.push_back((val >> 24) & 0xFF);
     }
     
-    void appendRectPixels(std::vector<uint8_t>& packet, const Image& frame, const DirtyRect& rect, uint16_t rleEscapeColor) {
-        if (tryAppendRunLengthEncodedRect(packet, frame, rect, rleEscapeColor)) {
+    void appendRectPixels(std::vector<uint8_t>& packet, const Image& frame,
+                      const DirtyRect& rect, bool rleEnabled,
+                      uint16_t rleEscapeColor, ColorMode colorMode) {
+        if (rleEnabled && tryAppendRunLengthEncodedRect(packet, frame, rect, rleEscapeColor, colorMode)) {
             return;
         }
-        for (int y = rect.y; y < rect.y + rect.h; ++y) {
-            for (int x = rect.x; x < rect.x + rect.w; ++x) {
-                Pixel p = frame.at(x, y);
-                packet.push_back(p & 0xFF);
-                packet.push_back((p >> 8) & 0xFF);
-            }
+        if (!rleEnabled) {
+            appendU32(packet, 0); // runLengthEncodingSize = 0 indicates raw data
+        }
+        // Raw packed pixels
+        if (colorMode == ColorMode::RGB565) {
+            // Fast path: little-endian uint16, directly memcpy-able on ESP32
+            for (int y = rect.y; y < rect.y + rect.h; ++y)
+                for (int x = rect.x; x < rect.x + rect.w; ++x)
+                    appendU16(packet, frame.at(x, y));
+        } else {
+            // Sub-byte modes: pack via bitstream
+            const int bpp = bitsPerPixel(colorMode);
+            BitWriter w(packet);
+            for (int y = rect.y; y < rect.y + rect.h; ++y)
+                for (int x = rect.x; x < rect.x + rect.w; ++x)
+                    w.write(frame.at(x, y), bpp);
+            w.flush();
         }
     }
 
     // Appends a escape code run-length encoded version of the rect to the packet if it would save space, returns true if appended
-    bool tryAppendRunLengthEncodedRect(std::vector<uint8_t>& packet, const Image& frame, const DirtyRect& rect, uint16_t rleEscapeColor) {
+    bool tryAppendRunLengthEncodedRect(std::vector<uint8_t>& packet, const Image& frame, const DirtyRect& rect, uint16_t rleEscapeColor, ColorMode colorMode) {
+        const int bpp = bitsPerPixel(colorMode);
+        const uint16_t maxRun = maxRunLength(colorMode);
+
+        // Build runs (cap at maxRun since count is N-bit)
         std::vector<std::pair<Pixel, uint16_t>> runs; // (color, length)
-        Pixel currentColor = frame.at(rect.x, rect.y);
-        uint16_t currentRunLength = 0;
-        
+        Pixel curColor = frame.at(rect.x, rect.y);
+        uint16_t curLen = 0;
+
         for (int y = rect.y; y < rect.y + rect.h; ++y) {
             for (int x = rect.x; x < rect.x + rect.w; ++x) {
                 Pixel p = frame.at(x, y);
-                if (p == currentColor && currentRunLength < UINT16_MAX) {
-                    currentRunLength++;
+                if (p == curColor && curLen < maxRun) {
+                    curLen++;
                 } else {
-                    runs.push_back({currentColor, currentRunLength});
-                    currentColor = p;
-                    currentRunLength = 1;
+                    runs.push_back({curColor, curLen});
+                    curColor = p;
+                    curLen = 1;
                 }
             }
         }
-        runs.push_back({currentColor, currentRunLength});
+        runs.push_back({curColor, curLen});
         
         // Calculate size of RLE data
-        size_t rleSize = 0;
+        size_t rleBits = 0;
         for (const auto& [color, length] : runs) {
-            if (length < 4) {
+            if (length < minRleRunLength()) { // Not worth encoding as RLE, would be smaller as raw pixels
                 // This will be encoded as a single raw pixel, no RLE overhead
-                rleSize += sizeof(Pixel) * length; // raw pixel
+                rleBits += bpp * length; // raw pixel
             } else {
                 // This will be encoded as an RLE run
-                rleSize += sizeof(uint16_t) + sizeof(Pixel) + sizeof(uint16_t);
+                rleBits += bpp * 3; // RLE entry: escape color + pixel color + run length
             }
         }
-        size_t rawSize = rect.byteSize();
+        size_t rleBytes = (rleBits + 7) / 8;
+        size_t rawSize = packedByteSize(rect.w * rect.h, colorMode);
         size_t OVERHEAD_ESTIMATION = 100; // Since RLE has more overhead, we require a significant reduction to be worth it
         
-        if (rleSize < rawSize - OVERHEAD_ESTIMATION) {
-            // Append RLE header for this rect
-            uint32_t runLengthEncodingSize = 0;
-            for (const auto& [color, length] : runs) {
-                if (length < 4) { // Run needs to be at least 4 pixels to be worth encoding as RLE
-                    runLengthEncodingSize += sizeof(Pixel) * length; // raw pixel
-                } else {
-                    runLengthEncodingSize += sizeof(uint16_t) + sizeof(Pixel) + sizeof(uint16_t); // RLE entry: escape color + pixel color + run length
-                }
-            }
-            appendU32(packet, runLengthEncodingSize);
-            
-            // Append RLE data
-            for (const auto& [color, length] : runs) {
-                if (length < 4) { // Not worth encoding as RLE, append raw pixels
-                    for (uint16_t i = 0; i < length; ++i) {
+        if (rleBytes < rawSize - OVERHEAD_ESTIMATION) {
+            // Encode RLE stream
+            size_t startPos = packet.size();
+            appendU32(packet, 0); // placeholder for size
+
+            if (colorMode == ColorMode::RGB565) {
+                // Byte-aligned little-endian encoding (fast path on ESP32)
+                for (const auto& [color, length] : runs) {
+                    if (length < minRleRunLength()) {
+                        for (uint16_t i = 0; i < length; ++i)
+                            appendU16(packet, color);
+                    } else {
+                        appendU16(packet, rleEscapeColor);
                         appendU16(packet, color);
+                        appendU16(packet, length);
                     }
-                    continue;
                 }
-                appendU16(packet, rleEscapeColor); // Escape color indicates start of RLE run
-                appendU16(packet, color);
-                appendU16(packet, length);
+            } else {
+                // Bitstream encoding (all values bpp bits wide)
+                BitWriter w(packet);
+                for (const auto& [color, length] : runs) {
+                    if (length < minRleRunLength()) {
+                        for (uint16_t i = 0; i < length; ++i)
+                            w.write(color, bpp);
+                    } else {
+                        w.write(rleEscapeColor, bpp);
+                        w.write(color, bpp);
+                        w.write(length, bpp);
+                    }
+                }
+                w.flush();
+            }
+
+            // Patch the size field
+            uint32_t rleSize = (uint32_t)(packet.size() - startPos - 4); // size of RLE data excluding the size field itself
+            memcpy(&packet[startPos], &rleSize, 4);
+            if (!debugHasPrintedFirst_) {
+                LOG_DEBUG << "RLE encoded rect: " << rleSize << " bytes (raw would be " << rawSize << ")\n";
+                LOG_DEBUG << "RLE escape color: 0x" << std::hex << rleEscapeColor << std::dec << "\n";
+                // Print original rect pixel data for debugging
+                std::string hexDump;
+                for (int y = rect.y; y < rect.y + rect.h; ++y) {
+                    for (int x = rect.x; x < rect.x + rect.w; ++x) {
+                        hexDump += std::format("{:04X} ", frame.at(x, y));
+                    }
+                }
+                LOG_DEBUG << "Original rect pixel data:\n" << hexDump << "\n";
+                for (const auto& [color, length] : runs) {
+                    LOG_DEBUG << "  Color: 0x" << std::hex << color << std::dec << " Length: " << length << "\n";
+                }
+                // Print RLE encoded data for debugging
+                std::string rleHexDump;
+                for (size_t i = startPos + 4; i < packet.size(); ++i) {
+                    rleHexDump += std::format("{:02X} ", packet[i]);
+                }
+                LOG_DEBUG << "RLE encoded data:\n" << rleHexDump << "\n";
+                debugHasPrintedFirst_ = true;
             }
             return true;
         } else {

@@ -28,12 +28,12 @@ class FrameSender {
 public:
     FrameSender(int fpsWindow = 10) 
         : running_(false), frameReady_(false), sendError_(false), sendErrorMsg_(""), fpsWindow_(fpsWindow),
-          frameConsumed_(false) {}
+          frameConsumed_(false), rleEnabled_(true) {}
     
     ~FrameSender() {
         stop();
     }
-    
+
     void start(TcpConnection* conn) {
         connection_ = conn;
         running_ = true;
@@ -128,6 +128,14 @@ public:
     
     void configureDirtyRects(const qualia::DirtyRectConfig& config) {
         dirtyTracker_.configure(config);
+    }
+
+    void setRLEEnabled(bool enabled) {
+        rleEnabled_ = enabled;
+    }
+
+    void setColorMode(ColorMode mode) {
+        colorMode_ = mode;
     }
     
     // Get current FPS (thread-safe)
@@ -258,10 +266,10 @@ private:
                 
                 if (isFlashMode) {
                     // Flash mode: send stats + dirty rects
-                    sendSuccess = sendFlashUpdate(flashStats, frameToSend);
+                    sendSuccess = sendFlashUpdate(flashStats, frameToSend, rleEnabled_, colorMode_);
                 } else {
                     // Normal mode: send dirty rects
-                    sendSuccess = sendNormalFrame(frameToSend);
+                    sendSuccess = sendNormalFrame(frameToSend, rleEnabled_, colorMode_);
                 }
                 
                 if (sendSuccess) {
@@ -298,12 +306,12 @@ private:
         }
     }
     
-    bool sendNormalFrame(const qualia::Image& frame) {
+    bool sendNormalFrame(const qualia::Image& frame, bool rleEnabled, ColorMode colorMode = ColorMode::RGB565) {
         // Find dirty rectangles
         auto [rects, rleEscapeColor] = dirtyTracker_.findDirtyRects(frame);
         
         // Build packet with dirty rect protocol
-        std::vector<uint8_t> packet = dirtyTracker_.buildPacket(frame, rects, rleEscapeColor);
+        std::vector<uint8_t> packet = dirtyTracker_.buildPacket(frame, rects, rleEnabled, rleEscapeColor, colorMode);
         
         // Update stats
         {
@@ -332,7 +340,7 @@ private:
     }
     
     bool sendFlashUpdate(const flash::FlashStatsMessage& stats,
-                         const qualia::Image& frame) {
+                         const qualia::Image& frame, bool rleEnabled, ColorMode colorMode = ColorMode::RGB565) {
         // Find dirty rects using normal comparison
         auto [rects, rleEscapeColor] = dirtyTracker_.findDirtyRects(frame);
         
@@ -405,6 +413,10 @@ private:
     std::atomic<bool> frameReady_;
     std::atomic<bool> sendError_;
     std::string sendErrorMsg_;
+
+    // Compression settings
+    std::atomic<bool> rleEnabled_;
+    std::atomic<ColorMode> colorMode_ = ColorMode::RGB565;
     
     // Flash mode pending data
     bool flashMode_ = false;

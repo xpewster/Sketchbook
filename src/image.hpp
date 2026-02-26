@@ -17,16 +17,6 @@ using Pixel = uint16_t;
 constexpr int DISPLAY_WIDTH = 240;
 constexpr int DISPLAY_HEIGHT = 960;
 
-// Convert RGB to RGB565
-constexpr Pixel rgb565(uint8_t r, uint8_t g, uint8_t b) {
-    return static_cast<Pixel>(((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3));
-}
-
-// Extract components from RGB565
-constexpr uint8_t rgb565_r(Pixel p) { return ((p >> 11) & 0x1F) << 3; }
-constexpr uint8_t rgb565_g(Pixel p) { return ((p >> 5) & 0x3F) << 2; }
-constexpr uint8_t rgb565_b(Pixel p) { return (p & 0x1F) << 3; }
-
 // image buffer
 class Image {
 public:

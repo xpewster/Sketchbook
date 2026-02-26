@@ -30,6 +30,8 @@ public:
         std::string espIP = "192.168.1.100";
         int espPort = 8080;
         std::string espDrive; // e.g. "E:"
+        bool rleEnabled = true;
+        ColorMode colorMode = ColorMode::RGB565;
     };
 
     struct Preferences {
@@ -124,10 +126,14 @@ public:
                 network.espIP = (*networkTable)["esp_ip"].value_or("192.168.1.100");
                 network.espPort = (*networkTable)["esp_port"].value_or(8080);
                 network.espDrive = (*networkTable)["esp_drive"].value_or("");
+                network.rleEnabled = (*networkTable)["rle_enabled"].value_or(true);
+                network.colorMode = static_cast<ColorMode>((*networkTable)["color_mode"].value_or(static_cast<int>(ColorMode::RGB565)));
             }
             LOG_INFO << "Loaded network settings: espIP=" << network.espIP 
                      << ", espPort=" << network.espPort 
                      << ", espDrive=" << (network.espDrive.empty() ? "NOT SET" : network.espDrive) 
+                     << ", rleEnabled=" << (network.rleEnabled ? "true" : "false")
+                     << ", colorMode=" << static_cast<int>(network.colorMode)
                      << "\n";
 
             if (auto trainTable = config["train"].as_table()) {
@@ -178,7 +184,9 @@ public:
             config.insert_or_assign("network", toml::table{
                 {"esp_ip", network.espIP},
                 {"esp_port", network.espPort},
-                {"esp_drive", network.espDrive}
+                {"esp_drive", network.espDrive},
+                {"rle_enabled", network.rleEnabled},
+                {"color_mode", static_cast<int>(network.colorMode)}
             });
 
             config.insert_or_assign("preferences", toml::table{
