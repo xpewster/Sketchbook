@@ -45,12 +45,22 @@ constexpr bool DISP_DE_IDLE_HIGH = false;
 constexpr uint16_t DISP_STRIDE = DISP_WIDTH + DISP_OVERSCAN_LEFT;  // 360 pixels per row in FB
 
 // ============================================================
+// Panel subclass — exposes the DMA framebuffer pointer
+// ============================================================
+// Panel_RGB::_frame_buffer is protected. Rather than patching LovyanGFX,
+// we subclass Panel_ST7701 and add an accessor.
+
+struct Panel_ST7701_Accessible : public lgfx::Panel_ST7701 {
+    uint8_t* getFrameBuffer() const { return _frame_buffer; }
+};
+
+// ============================================================
 // LGFX Device Class
 // ============================================================
 
 class LGFX : public lgfx::LGFX_Device {
-    lgfx::Panel_ST7701 _panel;
-    lgfx::Bus_RGB      _bus;
+    Panel_ST7701_Accessible _panel;
+    lgfx::Bus_RGB           _bus;
 
 public:
     LGFX() {
@@ -144,6 +154,25 @@ public:
         _panel.setBus(&_bus);
         setPanel(&_panel);
     }
+
+    // ============================================================
+    // Direct DMA framebuffer access
+    // ============================================================
+    // Bypasses pushImage (which memcpys 450KB every frame) and lets us
+    // composite directly into the buffer the LCD DMA reads from,
+    // matching what CircuitPython does with esp_lcd_rgb_panel_get_frame_buffer.
+
+    /// Raw DMA framebuffer (full stride including overscan). Returns nullptr before init().
+    uint16_t* getFrameBuffer() {
+        return (uint16_t*)_panel.getFrameBuffer();
+    }
+
+    /// Pointer to start of visible area (offset past left overscan).
+    /// Write FRAME_WIDTH pixels per row, advancing by DISP_STRIDE between rows.
+    uint16_t* getVisibleBuffer() {
+        uint16_t* fb = getFrameBuffer();
+        return fb ? fb + DISP_OVERSCAN_LEFT : nullptr;
+    }
 };
 
 // Global display instance
@@ -153,3 +182,19 @@ extern LGFX gfx;
 // Sends the init sequence over bit-banged SPI through the TCA9554,
 // then releases I2C so GPIO 47/48 can be used for RGB data.
 bool init_st7701s();
+
+// ============================================================
+// Cache writeback — flush CPU cache so LCD DMA sees latest pixels
+// ============================================================
+// Same approach as CircuitPython's dotclockframebuffer refresh().
+// The LCD_CAM DMA reads from PSRAM, but the CPU writes go through
+// cache. Without explicit writeback, DMA may read stale data.
+
+extern "C" int Cache_WriteBack_Addr(uint32_t addr, uint32_t size);
+
+inline void display_flush_cache() {
+    uint16_t* fb = gfx.getFrameBuffer();
+    if (fb) {
+        Cache_WriteBack_Addr((uint32_t)fb, DISP_STRIDE * DISP_HEIGHT * sizeof(uint16_t));
+    }
+}

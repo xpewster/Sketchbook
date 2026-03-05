@@ -259,23 +259,27 @@ void FlashModeManager::advance_animations() {
 // Compositing
 // ============================================================
 
-void FlashModeManager::tick_and_composite(uint16_t* framebuf) {
+void FlashModeManager::tick_and_composite(uint16_t* framebuf, int stride) {
     advance_animations();
 
     // Layer 1: Background
     if (_bg.loaded()) {
-        composite_layer_opaque(framebuf, _bg.pixels, _bg.w, _bg.h);
+        composite_layer_opaque(framebuf, stride, _bg.pixels, _bg.w, _bg.h);
     } else {
-        memset(framebuf, 0, FRAME_PIXELS * 2);
+        // Clear visible area row by row (stride may differ from FRAME_WIDTH)
+        for (int y = 0; y < FRAME_HEIGHT; y++) {
+            memset(&framebuf[y * stride], 0, FRAME_WIDTH * 2);
+        }
     }
 
     // Layer 2: Stream overlay (magenta = transparent)
-    composite_layer_transparent(framebuf, _stream, FRAME_WIDTH, FRAME_HEIGHT, 0, 0);
+    // _stream is always FRAME_WIDTH-strided (receives dirty rects at that stride)
+    composite_layer_transparent(framebuf, stride, _stream, FRAME_WIDTH, FRAME_HEIGHT, 0, 0);
 
     // Layer 3: Weather icon
     Sprite* wth = active_weather();
     if (wth && wth->pixels) {
-        composite_layer_transparent(framebuf, wth->pixels,
+        composite_layer_transparent(framebuf, stride, wth->pixels,
                                     wth->w, wth->h, wth->base_x, wth->base_y);
     }
 
@@ -288,27 +292,30 @@ void FlashModeManager::tick_and_composite(uint16_t* framebuf) {
             float elapsed_s = (float)(now - _start_us) / 1000000.0f;
             bob_offset = (int)(sinf(elapsed_s * _bob_speed * 2.0f * M_PI) * _bob_amp);
         }
-        composite_layer_transparent(framebuf, chr->pixels,
+        composite_layer_transparent(framebuf, stride, chr->pixels,
                                     chr->w, chr->h,
                                     chr->base_x + bob_offset, chr->base_y);
     }
 }
 
-void FlashModeManager::composite_layer_opaque(uint16_t* dst, const uint16_t* src,
+void FlashModeManager::composite_layer_opaque(uint16_t* dst, int dst_stride,
+                                               const uint16_t* src,
                                                int sw, int sh) {
     int cw = (sw < FRAME_WIDTH) ? sw : FRAME_WIDTH;
     int ch = (sh < FRAME_HEIGHT) ? sh : FRAME_HEIGHT;
 
-    if (cw == FRAME_WIDTH && sw == FRAME_WIDTH) {
+    // Fast path: if dst stride matches source width and visible width, single memcpy
+    if (cw == dst_stride && sw == dst_stride) {
         memcpy(dst, src, (size_t)cw * ch * 2);
     } else {
         for (int y = 0; y < ch; y++) {
-            memcpy(&dst[y * FRAME_WIDTH], &src[y * sw], cw * 2);
+            memcpy(&dst[y * dst_stride], &src[y * sw], cw * 2);
         }
     }
 }
 
-void FlashModeManager::composite_layer_transparent(uint16_t* dst, const uint16_t* src,
+void FlashModeManager::composite_layer_transparent(uint16_t* dst, int dst_stride,
+                                                     const uint16_t* src,
                                                      int sw, int sh, int dx, int dy) {
     int src_x0 = 0, src_y0 = 0;
     if (dx < 0) { src_x0 = -dx; dx = 0; }
@@ -323,7 +330,7 @@ void FlashModeManager::composite_layer_transparent(uint16_t* dst, const uint16_t
 
     for (int y = 0; y < draw_h; y++) {
         const uint16_t* srow = &src[(src_y0 + y) * sw + src_x0];
-        uint16_t* drow = &dst[(dy + y) * FRAME_WIDTH + dx];
+        uint16_t* drow = &dst[(dy + y) * dst_stride + dx];
 
         for (int x = 0; x < draw_w; x++) {
             uint16_t px = srow[x];

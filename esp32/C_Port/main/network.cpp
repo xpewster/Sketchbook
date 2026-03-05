@@ -1,5 +1,5 @@
 #include "network.h"
-#include "display.h"  // for gfx, FRAME_WIDTH/HEIGHT
+#include "display.h"  // for gfx, FRAME_WIDTH/HEIGHT, display_flush_cache
 
 #include "esp_wifi.h"
 #include "esp_event.h"
@@ -170,6 +170,28 @@ void network_init() {
 
 void network_cleanup() {
     free(rle_buf);
+}
+
+// ============================================================
+// Display Helpers — direct DMA framebuffer access
+// ============================================================
+// Instead of gfx.pushImage() (which memcpys 450KB from our buffer into
+// LovyanGFX's internal DMA buffer), we composite/copy directly into the
+// DMA buffer and flush the CPU cache so the LCD peripheral sees our writes.
+// This matches CircuitPython's approach (see DotClockFramebuffer.c).
+
+/// Copy streaming-mode framebuf (FRAME_WIDTH stride) into DMA visible area (DISP_STRIDE stride).
+static void blit_to_display(const uint16_t* src, uint16_t* dma_visible) {
+    for (int y = 0; y < FRAME_HEIGHT; y++) {
+        memcpy(&dma_visible[y * DISP_STRIDE], &src[y * FRAME_WIDTH], FRAME_WIDTH * 2);
+    }
+    display_flush_cache();
+}
+
+/// Clear entire DMA framebuffer (including overscan) to black.
+static void clear_display(uint16_t* dma_fb) {
+    memset(dma_fb, 0, DISP_STRIDE * DISP_HEIGHT * sizeof(uint16_t));
+    display_flush_cache();
 }
 
 // ============================================================
@@ -501,6 +523,18 @@ void tcp_server_start(uint16_t* framebuf) {
 
     ESP_LOGI(TAG, "TCP server listening on port %d", TCP_PORT);
 
+    // Get direct access to the LCD DMA framebuffer via Panel_ST7701_Accessible.
+    // This lets us write pixels directly where the LCD peripheral reads,
+    // eliminating the 450KB pushImage memcpy every frame.
+    uint16_t* dma_fb = gfx.getFrameBuffer();
+    uint16_t* dma_visible = gfx.getVisibleBuffer();
+    if (!dma_fb || !dma_visible) {
+        ESP_LOGE(TAG, "Failed to get DMA framebuffer — falling back to pushImage");
+    } else {
+        ESP_LOGI(TAG, "Direct DMA framebuffer access enabled (fb=%p, visible=%p, stride=%d)",
+                 dma_fb, dma_visible, DISP_STRIDE);
+    }
+
     while (true) {
         struct sockaddr_in client_addr;
         socklen_t client_len = sizeof(client_addr);
@@ -537,12 +571,28 @@ void tcp_server_start(uint16_t* framebuf) {
             if (result == RecvResult::OK) {
 
                 if (current_mode == proto::MODE_FLASH && s_flash_mgr.is_loaded()) {
-                    // Flash mode: composite all layers into framebuf
-                    s_flash_mgr.tick_and_composite(framebuf);
+                    // Flash mode: composite directly into DMA framebuffer
+                    if (dma_visible) {
+                        s_flash_mgr.tick_and_composite(dma_visible, DISP_STRIDE);
+                    } else {
+                        s_flash_mgr.tick_and_composite(framebuf);
+                    }
                 }
                 int64_t t2 = esp_timer_get_time();
 
-                gfx.pushImage(DISP_OVERSCAN_LEFT, 0, FRAME_WIDTH, FRAME_HEIGHT, framebuf);
+                // Blit to display
+                if (dma_visible) {
+                    if (current_mode != proto::MODE_FLASH || !s_flash_mgr.is_loaded()) {
+                        // Streaming mode: copy from recv buffer into DMA visible area
+                        blit_to_display(framebuf, dma_visible);
+                    } else {
+                        // Flash mode: already composited into DMA buffer, just flush cache
+                        display_flush_cache();
+                    }
+                } else {
+                    // Fallback: use LovyanGFX pushImage
+                    gfx.pushImage(DISP_OVERSCAN_LEFT, 0, FRAME_WIDTH, FRAME_HEIGHT, framebuf);
+                }
 
                 int64_t t3 = esp_timer_get_time();
                 recv_us_total += (t1 - t0);
@@ -552,30 +602,30 @@ void tcp_server_start(uint16_t* framebuf) {
             } else if (result == RecvResult::NO_CHANGE) {
                 if (current_mode == proto::MODE_FLASH && s_flash_mgr.is_loaded()) {
                     // Still animate and composite even with no new data
-                    s_flash_mgr.tick_and_composite(framebuf);
-                    gfx.pushImage(DISP_OVERSCAN_LEFT, 0, FRAME_WIDTH, FRAME_HEIGHT, framebuf);
+                    if (dma_visible) {
+                        s_flash_mgr.tick_and_composite(dma_visible, DISP_STRIDE);
+                        display_flush_cache();
+                    } else {
+                        s_flash_mgr.tick_and_composite(framebuf);
+                        gfx.pushImage(DISP_OVERSCAN_LEFT, 0, FRAME_WIDTH, FRAME_HEIGHT, framebuf);
+                    }
                 }
             } else if (result == RecvResult::TIMEOUT) {
                 if (current_mode == proto::MODE_FLASH && s_flash_mgr.is_loaded()) {
                     // Timeout in flash mode: keep animating
-                    s_flash_mgr.tick_and_composite(framebuf);
-                    gfx.pushImage(DISP_OVERSCAN_LEFT, 0, FRAME_WIDTH, FRAME_HEIGHT, framebuf);
+                    if (dma_visible) {
+                        s_flash_mgr.tick_and_composite(dma_visible, DISP_STRIDE);
+                        display_flush_cache();
+                    } else {
+                        s_flash_mgr.tick_and_composite(framebuf);
+                        gfx.pushImage(DISP_OVERSCAN_LEFT, 0, FRAME_WIDTH, FRAME_HEIGHT, framebuf);
+                    }
                 }
                 // In streaming mode, timeout means PC stopped sending — just wait
             } else if (result == RecvResult::MODE_CHANGED) {
                 ESP_LOGI(TAG, "Switching to mode %d", current_mode);
 
                 if (current_mode == proto::MODE_FLASH) {
-                    // Initialize flash mode manager if needed
-                    // if (!s_flash_mgr) {
-                    //     s_flash_mgr = new FlashModeManager();
-                    //     if (!s_flash_mgr.init(FLASH_CONFIG_FILE)) {
-                    //         ESP_LOGE(TAG, "Flash mode init failed — staying in streaming");
-                    //         delete s_flash_mgr;
-                    //         s_flash_mgr = nullptr;
-                    //         current_mode = proto::MODE_STREAMING;
-                    //     }
-                    // }
                     if (!s_flash_mgr.is_loaded()) {
                         ESP_LOGI(TAG, "Flash mode: waiting for data to load...");
                         s_flash_mgr.init(FLASH_CONFIG_FILE);
@@ -617,6 +667,10 @@ void tcp_server_start(uint16_t* framebuf) {
         ESP_LOGI(TAG, "Client disconnected");
 
         // Show black screen when idle
-        gfx.fillScreen(0);
+        if (dma_fb) {
+            clear_display(dma_fb);
+        } else {
+            gfx.fillScreen(0);
+        }
     }
 }

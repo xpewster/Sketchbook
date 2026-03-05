@@ -45,7 +45,10 @@ public:
     void mark_stream_dirty(int x, int y, int w, int h);
 
     // Advance animations + bobbing, composite all layers into framebuf.
-    void tick_and_composite(uint16_t* framebuf);
+    // stride: distance in pixels between rows in the destination buffer.
+    //   Use FRAME_WIDTH for a contiguous 240-wide buffer (legacy).
+    //   Use DISP_STRIDE to composite directly into the DMA framebuffer.
+    void tick_and_composite(uint16_t* framebuf, int stride = FRAME_WIDTH);
 
     bool is_loaded() const { return _loaded; }
 
@@ -88,7 +91,9 @@ private:
     Sprite* active_weather();
 
     void advance_animations();
-    void composite_layer_opaque(uint16_t* dst, const uint16_t* src, int sw, int sh);
-    void composite_layer_transparent(uint16_t* dst, const uint16_t* src,
+    void composite_layer_opaque(uint16_t* dst, int dst_stride,
+                                const uint16_t* src, int sw, int sh);
+    void composite_layer_transparent(uint16_t* dst, int dst_stride,
+                                     const uint16_t* src,
                                      int sw, int sh, int dx, int dy);
 };
