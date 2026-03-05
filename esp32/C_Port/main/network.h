@@ -9,6 +9,8 @@ enum class RecvResult {
     NO_CHANGE,
     MODE_CHANGED,
     RESET_REQUESTED,
+    RECONNECT_REQUESTED,
+    TIMEOUT,        // Socket timeout — no data available (not an error)
     DISCONNECTED,
     ERROR,
 };
@@ -16,18 +18,23 @@ enum class RecvResult {
 // Initialize WiFi station mode (blocks until connected)
 void wifi_init();
 
+// Disconnect and reconnect WiFi (used on MSG_RESET instead of full reboot)
+void reconnect_wifi();
+
 // Initialize network buffers
 void network_init();
 void network_cleanup();
 
 // Start TCP server on TCP_PORT. Blocks, accepts one client at a time.
-// Calls recv_callback for each received frame.
-// framebuf: pointer to the LGFX internal framebuffer to write into.
+// framebuf: pointer to the recv/composite buffer.
 void tcp_server_start(uint16_t* framebuf);
 
 // Receive one protocol message from client socket.
-// Writes pixels directly into framebuf.
+// Writes pixels directly into framebuf (streaming) or flash stream layer (flash mode).
 RecvResult recv_frame(int sock, uint16_t* framebuf, uint8_t& current_mode);
+
+// After recv_frame returns OK with MSG_FLASH_DATA, this holds the parsed header.
+extern FlashDataHeader g_last_flash_data;
 
 class BitReader {
     const uint8_t* data;
@@ -62,17 +69,15 @@ constexpr int bitsPerPixel(ColorMode mode) {
         case ColorMode::RGB343: return 10;
         case ColorMode::RGB332: return 8;
     }
-    return 16; // default to RGB565
+    return 16;
 }
 
-// Count is also N-bit, so max run is limited by color depth
 constexpr uint16_t maxRunLength(ColorMode mode) {
-    return (1 << bitsPerPixel(mode)) - 1; // 65535, 4095, 1023, 255
+    return (1 << bitsPerPixel(mode)) - 1;
 }
 
-constexpr uint16_t minRleRunLength() { return 4; } // same for all modes
+constexpr uint16_t minRleRunLength() { return 4; }
 
-// Packed byte size for N pixels
 inline size_t packedByteSize(size_t nPixels, ColorMode mode) {
     return (nPixels * bitsPerPixel(mode) + 7) / 8;
 }
@@ -103,7 +108,6 @@ inline uint16_t toRGB565(uint16_t px, ColorMode mode) {
     return px;
 }
 
-// Unified pixel writer helper
 inline void writePixel(uint16_t* framebuf, const DirtyRect& r,
                        int& px_x, int& px_y, uint16_t rgb565val) {
     framebuf[(r.y + px_y) * FRAME_WIDTH + (r.x + px_x)] = rgb565val;

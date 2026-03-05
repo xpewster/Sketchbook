@@ -15,6 +15,7 @@ namespace proto {
     constexpr uint8_t MSG_FLASH_DATA  = 0x03;
     constexpr uint8_t MSG_RESET       = 0x04;
     constexpr uint8_t MSG_SET_MODE    = 0x05;
+    constexpr uint8_t MSG_RECONNECT   = 0x06;
 
     constexpr uint8_t MODE_STREAMING = 0x00;
     constexpr uint8_t MODE_FLASH     = 0x01;
@@ -30,7 +31,7 @@ struct DirtyRect {
 struct __attribute__((packed)) DirtyRectsHeader {
     uint8_t rectCount;
     uint8_t colorMode;        // (0=RGB565, 1=RGB444, 2=RGB343, 3=RGB332)
-    uint16_t rleEscapeColor;  // if a pixel matches this color, the next two uint16_ts are a (color, count) pair instead of a literal pixel
+    uint16_t rleEscapeColor;
 };
 
 enum class ColorMode : uint8_t {
@@ -39,3 +40,21 @@ enum class ColorMode : uint8_t {
     RGB343 = 2,
     RGB332 = 3,
 };
+
+// Flash mode data header — sent after MSG_FLASH_DATA message type byte.
+// All multi-byte fields are little-endian.
+// Sensor values are fixed-point: actual = raw / 10.0
+struct __attribute__((packed)) FlashDataHeader {
+    uint8_t  weather_index;      // Weather icon index (0-6), or 0xFF for none
+    uint8_t  flags;              // FLAG_CPU_WARM | FLAG_CPU_HOT | FLAG_WEATHER_AVAIL | ...
+    uint16_t cpu_percent_x10;    // CPU usage * 10
+    uint16_t cpu_temp_x10;       // CPU temperature * 10
+    uint16_t mem_percent_x10;    // Memory usage * 10
+    int16_t  weather_temp_x10;   // Weather temperature * 10 (signed)
+    uint16_t train0_mins_x10;    // Train 0 arrival * 10
+    uint16_t train1_mins_x10;    // Train 1 arrival * 10
+    uint8_t  rect_count;         // Number of dirty rects following
+    uint8_t  color_mode;         // ColorMode for dirty rects (if rect_count > 0)
+    uint16_t rle_escape_color;   // RLE escape color (if rect_count > 0)
+};
+// Total: 18 bytes

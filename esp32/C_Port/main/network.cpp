@@ -13,11 +13,21 @@
 #include "lwip/err.h"
 #include "esp_timer.h"
 #include <cstring>
+#include <cerrno>
+
+#include "flash.h"
+#include "storage.h"
 
 static const char* TAG = "network";
 
 // Buffer for receiving RLE-compressed rects
 uint8_t* rle_buf;
+
+// Last received flash data (accessible after recv_frame returns OK for flash)
+FlashDataHeader g_last_flash_data = {};
+
+// Flash mode manager (created on mode switch)
+static FlashModeManager s_flash_mgr;
 
 // ============================================================
 // WiFi
@@ -27,13 +37,14 @@ static EventGroupHandle_t s_wifi_event_group;
 static const int WIFI_CONNECTED_BIT = BIT0;
 static const int WIFI_FAIL_BIT     = BIT1;
 static int s_retry_num = 0;
-static const int MAX_RETRY = 10;
+static const int MAX_RETRY = 1000;
+static bool pause_connect = false;
 
 static void wifi_event_handler(void* arg, esp_event_base_t base,
                                 int32_t id, void* data) {
-    if (base == WIFI_EVENT && id == WIFI_EVENT_STA_START) {
+    if (base == WIFI_EVENT && id == WIFI_EVENT_STA_START && !pause_connect) {
         esp_wifi_connect();
-    } else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
+    } else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED && !pause_connect) {
         if (s_retry_num < MAX_RETRY) {
             esp_wifi_connect();
             s_retry_num++;
@@ -89,6 +100,26 @@ void wifi_init() {
     }
 }
 
+void reconnect_wifi() {
+    ESP_LOGI(TAG, "Reconnecting WiFi...");
+    s_retry_num = 0;
+    xEventGroupClearBits(s_wifi_event_group, WIFI_CONNECTED_BIT | WIFI_FAIL_BIT);
+    esp_wifi_disconnect();
+    pause_connect = true;  // Prevent auto-reconnect during disconnect
+    vTaskDelay(pdMS_TO_TICKS(5000));  // Wait a bit for disconnect to complete
+    pause_connect = false;
+    esp_wifi_connect();
+    // wifi_event_handler will call esp_wifi_connect() on WIFI_EVENT_STA_DISCONNECTED
+    EventBits_t bits = xEventGroupWaitBits(s_wifi_event_group,
+        WIFI_CONNECTED_BIT | WIFI_FAIL_BIT, pdFALSE, pdFALSE, pdMS_TO_TICKS(10000));
+    if (bits & WIFI_CONNECTED_BIT) {
+        ESP_LOGI(TAG, "WiFi reconnected");
+        esp_wifi_set_ps(WIFI_PS_NONE);
+    } else {
+        ESP_LOGE(TAG, "WiFi reconnect failed");
+    }
+}
+
 // ============================================================
 // TCP Helpers
 // ============================================================
@@ -105,6 +136,16 @@ static bool recv_exact(int sock, void* buf, size_t len) {
     return true;
 }
 
+// Timeout-aware recv for the first byte of a message.
+// Returns 1 on success, 0 on timeout, -1 on error/disconnect.
+static int recv_msg_type(int sock, uint8_t* msg_type) {
+    int n = recv(sock, msg_type, 1, 0);
+    if (n == 1) return 1;
+    if (n == 0) return -1;  // Peer closed
+    if (errno == EAGAIN || errno == EWOULDBLOCK) return 0;  // Timeout
+    return -1;  // Error
+}
+
 // ============================================================
 // Protocol: recv_frame
 // ============================================================
@@ -116,20 +157,158 @@ static void send_ack(int sock) {
 
 void network_init() {
     // Allocate RLE buffer for dirty rects (worst case: no compression)
-    rle_buf = (uint8_t*)malloc(FRAME_BYTES);
+    rle_buf = (uint8_t*)heap_caps_malloc(FRAME_BYTES, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!rle_buf) {
+        rle_buf = (uint8_t*)malloc(FRAME_BYTES);
+    }
     if (!rle_buf) {
         ESP_LOGE(TAG, "Failed to allocate RLE buffer");
     }
     init_color_luts();
+    s_flash_mgr = FlashModeManager();
 }
 
 void network_cleanup() {
     free(rle_buf);
 }
 
+// ============================================================
+// Dirty Rect Receive Helper
+// ============================================================
+// Receives rect_count dirty rects into target buffer (stride = FRAME_WIDTH).
+// Used by both MSG_DIRTY_RECTS and MSG_FLASH_DATA.
+
+static RecvResult receive_dirty_rects(int sock, uint16_t* target,
+                                       uint8_t rect_count, ColorMode colorMode,
+                                       uint16_t rle_escape_color) {
+    DirtyRect rects[256];
+    if (!recv_exact(sock, rects, rect_count * sizeof(DirtyRect))) {
+        ESP_LOGE(TAG, "Failed to receive dirty rects");
+        return RecvResult::ERROR;
+    }
+    // ESP_LOGI(TAG, "Receiving %d dirty rects (ColorMode=%d, EscapeColor=0x%04X)",
+    //          rect_count, colorMode, rle_escape_color);
+
+    for (int i = 0; i < rect_count; i++) {
+        DirtyRect& r = rects[i];
+        // if (r.w == FRAME_WIDTH) {
+        //     uint16_t* dst = target + r.y * FRAME_WIDTH;
+        //     if (!recv_exact(sock, dst, r.w * r.h * 2))
+        //         return RecvResult::ERROR;
+        // } else {
+        uint32_t runLengthEncodingSize;
+        if (!recv_exact(sock, &runLengthEncodingSize, sizeof(runLengthEncodingSize))) {
+            ESP_LOGE(TAG, "Failed to receive RLE size");
+            return RecvResult::ERROR;
+        }
+        // ESP_LOGI(TAG, "Rect %d: x=%d y=%d w=%d h=%d RLE size=%d bytes ColorMode=%d EscapeColor=0x%04X",
+        //          i, r.x, r.y, r.w, r.h, runLengthEncodingSize, header.colorMode, rle_escape_color);
+
+
+        const int bpp = bitsPerPixel(colorMode);
+
+        if (runLengthEncodingSize == 0) {
+            // Raw packed data
+            if (colorMode == ColorMode::RGB565) {
+                // Fast path: recv directly into framebuffer row by row
+                for (int row = 0; row < r.h; row++) {
+                    uint16_t* dst = target + (r.y + row) * FRAME_WIDTH + r.x;
+                    if (!recv_exact(sock, dst, r.w * 2)) {
+                        ESP_LOGE(TAG, "Failed to receive uncompressed rect row");
+                        return RecvResult::ERROR;
+                    }
+                }
+            } else {
+                // Sub-byte modes: recv packed bitstream, then unpack with conversion
+                size_t rawBytes = packedByteSize((size_t)r.w * r.h, colorMode);
+                if (!recv_exact(sock, rle_buf, rawBytes)) {
+                    ESP_LOGE(TAG, "Failed to receive raw rect data");
+                    return RecvResult::ERROR;
+                }
+                BitReader reader(rle_buf, rawBytes);
+                int total = r.w * r.h;
+                int px_x = 0, px_y = 0;
+                for (int j = 0; j < total; j++) {
+                    uint16_t px = reader.read(bpp);
+                    writePixel(target, r, px_x, px_y, toRGB565(px, colorMode));
+                }
+            }
+        } else {
+            int px_x = 0, px_y = 0;
+
+            if (colorMode == ColorMode::RGB565) {
+                // Fast path: byte-aligned little-endian uint16_t stream
+                if (!recv_exact(sock, rle_buf, runLengthEncodingSize)) {
+                    ESP_LOGE(TAG, "Failed to receive RLE rect data");
+                    return RecvResult::ERROR;
+                }
+                uint16_t* p = (uint16_t*)rle_buf;
+                uint16_t* p_end = (uint16_t*)(rle_buf + runLengthEncodingSize);
+
+                while (px_y < r.h) {
+                    if (p >= p_end) { ESP_LOGE(TAG, "RLE buffer overrun"); ESP_LOGI(TAG, "RLEsize=%d", runLengthEncodingSize); return RecvResult::ERROR; }
+                    uint16_t color = *p++;
+                    uint16_t count = 1;
+
+                    if (color == rle_escape_color) {
+                        if (p + 2 > p_end) { ESP_LOGE(TAG, "RLE buffer overrun during escape sequence"); ESP_LOGI(TAG, "RLEsize=%d", runLengthEncodingSize); return RecvResult::ERROR; }
+                        color = *p++;
+                        count = *p++;
+                    }
+
+                    for (uint16_t j = 0; j < count; j++) {
+                        target[(r.y + px_y) * FRAME_WIDTH + (r.x + px_x)] = color;
+                        if (++px_x >= r.w) {
+                            px_x = 0;
+                            px_y++;
+                            if (px_y >= r.h && j + 1 < count) {
+                                ESP_LOGE(TAG, "RLE pixel overrun");
+                                return RecvResult::ERROR;
+                            }
+                        }
+                    }
+                }
+            } else {
+                // Sub-byte modes: N-bit aligned bitstream
+                if (!recv_exact(sock, rle_buf, runLengthEncodingSize)) {
+                    ESP_LOGE(TAG, "Failed to receive RLE rect data");
+                    return RecvResult::ERROR;
+                }
+                BitReader reader(rle_buf, runLengthEncodingSize);
+
+                while (px_y < r.h) {
+                    uint16_t color = reader.read(bpp);
+                    uint16_t count = 1;
+
+                    if (color == rle_escape_color) {
+                        color = reader.read(bpp);
+                        count = reader.read(bpp);
+                    }
+
+                    uint16_t rgb565val = toRGB565(color, colorMode);
+                    for (uint16_t j = 0; j < count; j++) {
+                        target[(r.y + px_y) * FRAME_WIDTH + (r.x + px_x)] = rgb565val;
+                        if (++px_x >= r.w) {
+                            px_x = 0;
+                            px_y++;
+                            if (px_y >= r.h && j + 1 < count) {
+                                ESP_LOGE(TAG, "RLE pixel overrun");
+                                return RecvResult::ERROR;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    return RecvResult::OK;
+}
+
 RecvResult recv_frame(int sock, uint16_t* framebuf, uint8_t& current_mode) {
     uint8_t msg_type;
-    if (!recv_exact(sock, &msg_type, 1)) {
+    int rc = recv_msg_type(sock, &msg_type);
+    if (rc == 0) return RecvResult::TIMEOUT;
+    if (rc < 0) {
         ESP_LOGE(TAG, "Failed to receive message type");
         return RecvResult::DISCONNECTED;
     }
@@ -155,7 +334,7 @@ RecvResult recv_frame(int sock, uint16_t* framebuf, uint8_t& current_mode) {
             }
             size_t rawBytes = packedByteSize(FRAME_PIXELS, colorMode);
             if (!recv_exact(sock, rle_buf, rawBytes)) {
-                ESP_LOGE(TAG, "Failed to receive full frame");
+                ESP_LOGE(TAG, "Failed to receive full frame packed data");
                 return RecvResult::ERROR;
             }
             BitReader reader(rle_buf, rawBytes);
@@ -175,130 +354,73 @@ RecvResult recv_frame(int sock, uint16_t* framebuf, uint8_t& current_mode) {
             ESP_LOGE(TAG, "Failed to receive dirty rects header");
             return RecvResult::ERROR;
         }
-        uint8_t rect_count = header.rectCount;
         ColorMode colorMode = static_cast<ColorMode>(header.colorMode);
-        uint16_t rle_escape_color = header.rleEscapeColor;
 
-        DirtyRect rects[256];
-        if (!recv_exact(sock, rects, rect_count * sizeof(DirtyRect))) {
-            ESP_LOGE(TAG, "Failed to receive dirty rects");
+        RecvResult rr = receive_dirty_rects(sock, framebuf,
+                                             header.rectCount, colorMode,
+                                             header.rleEscapeColor);
+        if (rr != RecvResult::OK) return rr;
+
+        send_ack(sock);
+        return RecvResult::OK;
+    }
+
+    case proto::MSG_FLASH_DATA: {
+        FlashDataHeader fh;
+        if (!recv_exact(sock, &fh, sizeof(fh))) {
+            ESP_LOGE(TAG, "Failed to receive flash data header");
             return RecvResult::ERROR;
         }
-        // ESP_LOGI(TAG, "Receiving %d dirty rects (ColorMode=%d, EscapeColor=0x%04X)",
-        //          rect_count, colorMode, rle_escape_color);
 
-        for (int i = 0; i < rect_count; i++) {
-            DirtyRect& r = rects[i];
-            // if (r.w == FRAME_WIDTH) {
-            //     uint16_t* dst = framebuf + r.y * FRAME_WIDTH;
-            //     if (!recv_exact(sock, dst, r.w * r.h * 2))
-            //         return RecvResult::ERROR;
-            // } else {
-            uint32_t runLengthEncodingSize;
-            if (!recv_exact(sock, &runLengthEncodingSize, sizeof(runLengthEncodingSize))) {
-                ESP_LOGE(TAG, "Failed to receive RLE size");
-                return RecvResult::ERROR;
-            }
-            // ESP_LOGI(TAG, "Rect %d: x=%d y=%d w=%d h=%d RLE size=%d bytes ColorMode=%d EscapeColor=0x%04X",
-            //          i, r.x, r.y, r.w, r.h, runLengthEncodingSize, header.colorMode, rle_escape_color);
-            
-            
-            const int bpp = bitsPerPixel(colorMode);
+        g_last_flash_data = fh;
 
-            if (runLengthEncodingSize == 0) {
-                // Raw packed data
-                if (colorMode == ColorMode::RGB565) {
-                    // Fast path: recv directly into framebuffer row by row
-                    for (int row = 0; row < r.h; row++) {
-                        uint16_t* dst = framebuf + (r.y + row) * FRAME_WIDTH + r.x;
-                        if (!recv_exact(sock, dst, r.w * 2)) {
-                            ESP_LOGE(TAG, "Failed to receive uncompressed rect row");
-                            return RecvResult::ERROR;
-                        }
-                    }
-                } else {
-                    // Sub-byte modes: recv packed bitstream, then unpack with conversion
-                    size_t rawBytes = packedByteSize((size_t)r.w * r.h, colorMode);
-                    if (!recv_exact(sock, rle_buf, rawBytes)) {
-                        ESP_LOGE(TAG, "Failed to receive raw rect data");
-                        return RecvResult::ERROR;
-                    }
-                    BitReader reader(rle_buf, rawBytes);
-                    int total = r.w * r.h;
-                    int px_x = 0, px_y = 0;
-                    for (int j = 0; j < total; j++) {
-                        uint16_t px = reader.read(bpp);
-                        writePixel(framebuf, r, px_x, px_y, toRGB565(px, colorMode));
-                    }
+        // Receive dirty rects into flash manager's stream buffer
+        if (fh.rect_count > 0) {
+            ColorMode mode = static_cast<ColorMode>(fh.color_mode);
+            uint16_t* target = s_flash_mgr.is_loaded() ? s_flash_mgr.stream_pixels() : nullptr;
+
+            if (target) {
+                RecvResult rr = receive_dirty_rects(sock, target,
+                                                     fh.rect_count, mode,
+                                                     fh.rle_escape_color);
+                if (rr != RecvResult::OK) {
+                    ESP_LOGE(TAG, "Failed to receive flash dirty rects");
+                    return rr;
                 }
             } else {
-                int px_x = 0, px_y = 0;
-
-                if (colorMode == ColorMode::RGB565) {
-                    // Fast path: byte-aligned little-endian uint16_t stream
-                    if (!recv_exact(sock, rle_buf, runLengthEncodingSize)) {
-                        ESP_LOGE(TAG, "Failed to receive RLE rect data");
+                // Flash manager not ready — drain the rect data so the stream stays in sync
+                ESP_LOGW(TAG, "Flash data received but no flash manager — draining");
+                DirtyRect rects[256];
+                if (!recv_exact(sock, rects, fh.rect_count * sizeof(DirtyRect))) {
+                    ESP_LOGE(TAG, "Failed to drain flash dirty rect headers");
+                    return RecvResult::ERROR;
+                }
+                for (int i = 0; i < fh.rect_count; i++) {
+                    uint32_t rleSize;
+                    if (!recv_exact(sock, &rleSize, sizeof(rleSize))) {
+                        ESP_LOGE(TAG, "Failed to drain flash dirty rect RLE size");
                         return RecvResult::ERROR;
                     }
-                    uint16_t* p = (uint16_t*)rle_buf;
-                    uint16_t* p_end = (uint16_t*)(rle_buf + runLengthEncodingSize);
-
-                    while (px_y < r.h) {
-                        if (p >= p_end) { ESP_LOGE(TAG, "RLE buffer overrun"); ESP_LOGI(TAG, "RLEsize=%d", runLengthEncodingSize); return RecvResult::ERROR; }
-                        uint16_t color = *p++;
-                        uint16_t count = 1;
-
-                        if (color == rle_escape_color) {
-                            if (p + 2 > p_end) { ESP_LOGE(TAG, "RLE buffer overrun during escape sequence"); ESP_LOGI(TAG, "RLEsize=%d", runLengthEncodingSize); return RecvResult::ERROR; }
-                            color = *p++;
-                            count = *p++;
-                        }
-
-                        for (uint16_t j = 0; j < count; j++) {
-                            framebuf[(r.y + px_y) * FRAME_WIDTH + (r.x + px_x)] = color;
-                            if (++px_x >= r.w) {
-                                px_x = 0;
-                                px_y++;
-                                if (px_y >= r.h && j + 1 < count) {
-                                    ESP_LOGE(TAG, "RLE pixel overrun");
-                                    return RecvResult::ERROR;
-                                }
-                            }
-                        }
+                    size_t bytes;
+                    if (rleSize > 0) {
+                        bytes = rleSize;
+                    } else if (mode == ColorMode::RGB565) {
+                        bytes = (size_t)rects[i].w * rects[i].h * 2;
+                    } else {
+                        bytes = packedByteSize((size_t)rects[i].w * rects[i].h, mode);
                     }
-                } else {
-                    // Sub-byte modes: N-bit aligned bitstream
-                    if (!recv_exact(sock, rle_buf, runLengthEncodingSize)) {
-                        ESP_LOGE(TAG, "Failed to receive RLE rect data");
+                    if (bytes > 0 && !recv_exact(sock, rle_buf, bytes)) {
+                        ESP_LOGE(TAG, "Failed to drain flash dirty rect pixel data");
                         return RecvResult::ERROR;
-                    }
-                    BitReader reader(rle_buf, runLengthEncodingSize);
-
-                    while (px_y < r.h) {
-                        uint16_t color = reader.read(bpp);
-                        uint16_t count = 1;
-
-                        if (color == rle_escape_color) {
-                            color = reader.read(bpp);
-                            count = reader.read(bpp);
-                        }
-
-                        uint16_t rgb565val = toRGB565(color, colorMode);
-                        for (uint16_t j = 0; j < count; j++) {
-                            framebuf[(r.y + px_y) * FRAME_WIDTH + (r.x + px_x)] = rgb565val;
-                            if (++px_x >= r.w) {
-                                px_x = 0;
-                                px_y++;
-                                if (px_y >= r.h && j + 1 < count) {
-                                    ESP_LOGE(TAG, "RLE pixel overrun");
-                                    return RecvResult::ERROR;
-                                }
-                            }
-                        }
                     }
                 }
             }
         }
+
+        if (s_flash_mgr.is_loaded()) {
+            s_flash_mgr.update_from_data(fh);
+        }
+
         send_ack(sock);
         return RecvResult::OK;
     }
@@ -326,6 +448,12 @@ RecvResult recv_frame(int sock, uint16_t* framebuf, uint8_t& current_mode) {
         return RecvResult::RESET_REQUESTED;
     }
 
+    case proto::MSG_RECONNECT: {
+        ESP_LOGW(TAG, "Reconnect requested");
+        send_ack(sock);
+        return RecvResult::RECONNECT_REQUESTED;
+    }
+
     default:
         ESP_LOGW(TAG, "Unknown message type: 0x%02X", msg_type);
         return RecvResult::ERROR;
@@ -337,6 +465,7 @@ RecvResult recv_frame(int sock, uint16_t* framebuf, uint8_t& current_mode) {
 // ============================================================
 
 void tcp_server_start(uint16_t* framebuf) {
+    s_retry_num = 0;
     int server_sock = socket(AF_INET, SOCK_STREAM, IPPROTO_IP);
     if (server_sock < 0) {
         ESP_LOGE(TAG, "socket() failed");
@@ -377,7 +506,6 @@ void tcp_server_start(uint16_t* framebuf) {
         socklen_t client_len = sizeof(client_addr);
         int client_sock = accept(server_sock, (struct sockaddr*)&client_addr, &client_len);
         if (client_sock < 0) {
-            ESP_LOGW(TAG, "accept() failed");
             vTaskDelay(pdMS_TO_TICKS(1000));
             continue;
         }
@@ -399,6 +527,7 @@ void tcp_server_start(uint16_t* framebuf) {
         int64_t fps_start = esp_timer_get_time();
         int64_t recv_us_total = 0;
         int64_t blit_us_total = 0;
+        int64_t composite_us_total = 0;
 
         while (true) {
             int64_t t0 = esp_timer_get_time();
@@ -407,19 +536,58 @@ void tcp_server_start(uint16_t* framebuf) {
 
             if (result == RecvResult::OK) {
 
+                if (current_mode == proto::MODE_FLASH && s_flash_mgr.is_loaded()) {
+                    // Flash mode: composite all layers into framebuf
+                    s_flash_mgr.tick_and_composite(framebuf);
+                }
+                int64_t t2 = esp_timer_get_time();
+
                 gfx.pushImage(DISP_OVERSCAN_LEFT, 0, FRAME_WIDTH, FRAME_HEIGHT, framebuf);
 
-                int64_t t2 = esp_timer_get_time();
+                int64_t t3 = esp_timer_get_time();
                 recv_us_total += (t1 - t0);
-                blit_us_total += (t2 - t1);
+                composite_us_total += (t2 - t1);
+                blit_us_total += (t3 - t2);
                 frame_count++;
             } else if (result == RecvResult::NO_CHANGE) {
-                // Nothing to update
+                if (current_mode == proto::MODE_FLASH && s_flash_mgr.is_loaded()) {
+                    // Still animate and composite even with no new data
+                    s_flash_mgr.tick_and_composite(framebuf);
+                    gfx.pushImage(DISP_OVERSCAN_LEFT, 0, FRAME_WIDTH, FRAME_HEIGHT, framebuf);
+                }
+            } else if (result == RecvResult::TIMEOUT) {
+                if (current_mode == proto::MODE_FLASH && s_flash_mgr.is_loaded()) {
+                    // Timeout in flash mode: keep animating
+                    s_flash_mgr.tick_and_composite(framebuf);
+                    gfx.pushImage(DISP_OVERSCAN_LEFT, 0, FRAME_WIDTH, FRAME_HEIGHT, framebuf);
+                }
+                // In streaming mode, timeout means PC stopped sending — just wait
             } else if (result == RecvResult::MODE_CHANGED) {
-                // TODO: handle flash mode
+                ESP_LOGI(TAG, "Switching to mode %d", current_mode);
+
+                if (current_mode == proto::MODE_FLASH) {
+                    // Initialize flash mode manager if needed
+                    // if (!s_flash_mgr) {
+                    //     s_flash_mgr = new FlashModeManager();
+                    //     if (!s_flash_mgr.init(FLASH_CONFIG_FILE)) {
+                    //         ESP_LOGE(TAG, "Flash mode init failed — staying in streaming");
+                    //         delete s_flash_mgr;
+                    //         s_flash_mgr = nullptr;
+                    //         current_mode = proto::MODE_STREAMING;
+                    //     }
+                    // }
+                    if (!s_flash_mgr.is_loaded()) {
+                        ESP_LOGI(TAG, "Flash mode: waiting for data to load...");
+                        s_flash_mgr.init(FLASH_CONFIG_FILE);
+                    }
+                }
             } else if (result == RecvResult::RESET_REQUESTED) {
-                close(client_sock);
                 esp_restart();
+                break;
+            } else if (result == RecvResult::RECONNECT_REQUESTED) {
+                close(client_sock);
+                reconnect_wifi();
+                break;
             } else {
                 // Disconnected or error
                 ESP_LOGE(TAG, "recv_frame() failed with result %d, closing connection", (int)result);
@@ -432,12 +600,14 @@ void tcp_server_start(uint16_t* framebuf) {
             if (elapsed >= 5000000) {  // 5 seconds
                 float fps = (float)frame_count * 1000000.0f / elapsed;
                 float avg_recv_ms = frame_count ? (recv_us_total / 1000.0f / frame_count) : 0;
+                float avg_composite_ms = frame_count ? (composite_us_total / 1000.0f / frame_count) : 0;
                 float avg_blit_ms = frame_count ? (blit_us_total / 1000.0f / frame_count) : 0;
                 float throughput_mbps = frame_count ? (frame_count * FRAME_BYTES * 8.0f / elapsed) : 0;
-                ESP_LOGI(TAG, "FPS: %.1f | recv: %.1fms | blit: %.1fms | %.1f Mbps (%d frames)",
-                         fps, avg_recv_ms, avg_blit_ms, throughput_mbps, frame_count);
+                ESP_LOGI(TAG, "FPS: %.1f | recv: %.1fms | composite: %.1fms | blit: %.1fms | %.1f Mbps (%d frames)",
+                         fps, avg_recv_ms, avg_composite_ms, avg_blit_ms, throughput_mbps, frame_count);
                 frame_count = 0;
                 recv_us_total = 0;
+                composite_us_total = 0;
                 blit_us_total = 0;
                 fps_start = now;
             }
