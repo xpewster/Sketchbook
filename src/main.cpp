@@ -398,6 +398,11 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
                     settings.preferences.flashMode = true;
                     flashModeCB.setChecked(true, true);
                 }
+                // Send reset if needed so board can load new assets
+                if (settings.preferences.resetAfterFlash) {
+                    LOG_INFO << "Resetting board after flash export\n";
+                    sender.sendReset();
+                }
             } else {
                 LOG_WARN << "Flash export failed: " << result.error << "\n";
                 flashExportStatus = "Flash export failed: " + result.error;
@@ -721,6 +726,21 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
                 LOG_WARN << "Cannot reset board - not connected\n";
                 trayManager.ShowNotification("Cannot reset board", "Sketchbook must be connected to the remote board to reset it.", NIIF_WARNING);
                 statusMsg = "Not connected - cannot reset board";
+            }
+        }
+        if (trayManager.ShouldReconnectWifi()) {
+            if (connected) {
+                LOG_INFO << "Sending WiFi reconnect command...\n";
+                if (sender.sendReconnect()) {
+                    LOG_INFO << "WiFi reconnect command sent successfully.\n";
+                } else {
+                    LOG_ERROR << "Failed to send WiFi reconnect command.\n";
+                    statusMsg = "Failed to send WiFi reconnect command";
+                }
+            } else {
+                LOG_WARN << "Cannot send WiFi reconnect command - not connected\n";
+                trayManager.ShowNotification("Cannot reconnect WiFi", "Sketchbook must be connected to the remote board to send a WiFi reconnect command.", NIIF_WARNING);
+                statusMsg = "Not connected - cannot send WiFi reconnect command";
             }
         }
         

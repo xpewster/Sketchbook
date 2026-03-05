@@ -78,7 +78,7 @@ struct FlashStatsMessage {
     static constexpr uint8_t FLAG_TRAIN1_AVAIL = 0x10;
     
     // Serialize to bytes (fixed 16-byte header)
-    std::vector<uint8_t> serialize(uint8_t rectCount) const {
+    std::vector<uint8_t> serialize() const {
         std::vector<uint8_t> data;
         data.reserve(17);  // 16 bytes header + 1 byte rect_count
         
@@ -98,9 +98,6 @@ struct FlashStatsMessage {
         data.push_back((train0Mins10 >> 8) & 0xFF);
         data.push_back(train1Mins10 & 0xFF);
         data.push_back((train1Mins10 >> 8) & 0xFF);
-        
-        // Rect count for any streamed layers
-        data.push_back(rectCount);
         
         return data;
     }

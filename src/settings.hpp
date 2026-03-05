@@ -45,6 +45,7 @@ public:
         bool closeToTray = true;
         bool autoConnect = false;
         bool autoMemFlash = false;
+        bool resetAfterFlash = true;
     };
 
     struct TrainConfig {
@@ -87,6 +88,7 @@ public:
                 preferences.autoConnect = (*prefTable)["auto_connect"].value_or(false);
                 preferences.startMinimized = (*prefTable)["start_minimized"].value_or(false);
                 preferences.autoMemFlash = (*prefTable)["auto_mem_flash"].value_or(false);
+                preferences.resetAfterFlash = (*prefTable)["reset_after_flash"].value_or(true);
             }
             LOG_INFO << "Loaded preferences: selectedSkin=" << preferences.selectedSkin 
                      << ", rotate180=" << preferences.rotate180
@@ -98,6 +100,7 @@ public:
                      << ", autoConnect=" << preferences.autoConnect
                      << ", startMinimized=" << preferences.startMinimized
                      << ", autoMemFlash=" << preferences.autoMemFlash
+                     << ", resetAfterFlash=" << preferences.resetAfterFlash
                      << "\n";
             
             // Parse weather settings
@@ -199,7 +202,8 @@ public:
                 {"start_minimized", preferences.startMinimized},
                 {"close_to_tray", preferences.closeToTray},
                 {"auto_connect", preferences.autoConnect},
-                {"auto_mem_flash", preferences.autoMemFlash}
+                {"auto_mem_flash", preferences.autoMemFlash},
+                {"reset_after_flash", preferences.resetAfterFlash}
             });
 
             config.insert_or_assign("train", toml::table{

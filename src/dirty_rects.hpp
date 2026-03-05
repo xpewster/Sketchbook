@@ -62,6 +62,9 @@ struct DirtyRect {
 //   If MSG_FULL_FRAME:
 //     [1 byte]  color mode (0=RGB565, 1=RGB444, 2=RGB343, 3=RGB332)
 //     [raw pixel data]
+//   If MSG_FLASH_DATA:
+//     [.. bytes] flash stats header (see flash_exporter.hpp)
+//     Same as MSG_DIRTY_RECTS for the rest of the packet
 //   If MSG_NO_CHANGE:
 //     (no additional data)
 
@@ -159,10 +162,48 @@ public:
         
         return {rects, escapeColor};
     }
+
+    void appendDirtyRectData(std::vector<uint8_t>& packet, const Image& frame, const std::vector<DirtyRect>& rects, bool rleEnabled, uint16_t rleEscapeColor = DEFAULT_RLE_ESCAPE_COLOR, ColorMode colorMode = ColorMode::RGB565) {
+        // Write rect headers
+        packet.push_back(static_cast<uint8_t>(rects.size()));
+        packet.push_back(static_cast<uint8_t>(colorMode));
+        uint16_t adjustedRleEscapeColor = rleEscapeColor;
+        // If using a more compact color mode, we need to adjust the escape color to fit within the reduced bit depth
+        if (rleEnabled && colorMode != ColorMode::RGB565) {
+            switch (colorMode) {
+                case ColorMode::RGB444:
+                    adjustedRleEscapeColor = rgb444(((rleEscapeColor >> 11) & 0x1F) << 3, ((rleEscapeColor >> 5) & 0x3F) << 2, (rleEscapeColor & 0x1F) << 3);
+                    break;
+                case ColorMode::RGB343:
+                    adjustedRleEscapeColor = rgb343(((rleEscapeColor >> 11) & 0x1F) << 3, ((rleEscapeColor >> 5) & 0x3F) << 2, (rleEscapeColor & 0x1F) << 3);
+                    break;
+                case ColorMode::RGB332:
+                    adjustedRleEscapeColor = rgb332(((rleEscapeColor >> 11) & 0x1F) << 3, ((rleEscapeColor >> 5) & 0x3F) << 2, (rleEscapeColor & 0x1F) << 3);
+                    break;
+                default:
+                    break;
+            }
+        }
+        appendU16(packet, adjustedRleEscapeColor);
+        
+        // Write rect dimensions
+        for (const auto& rect : rects) {
+            appendU16(packet, rect.x);
+            appendU16(packet, rect.y);
+            appendU16(packet, rect.w);
+            appendU16(packet, rect.h);
+        }
+        
+        // Write pixel data for each rect
+        for (const auto& rect : rects) {
+            appendRectPixels(packet, frame, rect, rleEnabled, adjustedRleEscapeColor, colorMode);
+        }
+    }
     
     // Build packet with dirty rect header and pixel data
     std::vector<uint8_t> buildPacket(const Image& frame, const std::vector<DirtyRect>& rects, bool rleEnabled, uint16_t rleEscapeColor = DEFAULT_RLE_ESCAPE_COLOR, ColorMode colorMode = ColorMode::RGB565) {
         std::vector<uint8_t> packet;
+        packet.reserve(4 + rects.size() * 12); // Reserve base amount of space for header and rect headers
         
         if (rects.empty()) {
             // No changes
@@ -187,39 +228,7 @@ public:
             }
         } else {
             packet.push_back(MSG_DIRTY_RECTS);
-            packet.push_back(static_cast<uint8_t>(rects.size()));
-            packet.push_back(static_cast<uint8_t>(colorMode));
-            uint16_t adjustedRleEscapeColor = rleEscapeColor;
-            // If using a more compact color mode, we need to adjust the escape color to fit within the reduced bit depth
-            if (rleEnabled && colorMode != ColorMode::RGB565) {
-                switch (colorMode) {
-                    case ColorMode::RGB444:
-                        adjustedRleEscapeColor = rgb444(((rleEscapeColor >> 11) & 0x1F) << 3, ((rleEscapeColor >> 5) & 0x3F) << 2, (rleEscapeColor & 0x1F) << 3);
-                        break;
-                    case ColorMode::RGB343:
-                        adjustedRleEscapeColor = rgb343(((rleEscapeColor >> 11) & 0x1F) << 3, ((rleEscapeColor >> 5) & 0x3F) << 2, (rleEscapeColor & 0x1F) << 3);
-                        break;
-                    case ColorMode::RGB332:
-                        adjustedRleEscapeColor = rgb332(((rleEscapeColor >> 11) & 0x1F) << 3, ((rleEscapeColor >> 5) & 0x3F) << 2, (rleEscapeColor & 0x1F) << 3);
-                        break;
-                    default:
-                        break;
-                }
-            }
-            appendU16(packet, adjustedRleEscapeColor);
-            
-            // Write rect headers
-            for (const auto& rect : rects) {
-                appendU16(packet, rect.x);
-                appendU16(packet, rect.y);
-                appendU16(packet, rect.w);
-                appendU16(packet, rect.h);
-            }
-            
-            // Write pixel data for each rect
-            for (const auto& rect : rects) {
-                appendRectPixels(packet, frame, rect, rleEnabled, adjustedRleEscapeColor, colorMode);
-            }
+            appendDirtyRectData(packet, frame, rects, rleEnabled, rleEscapeColor, colorMode);
         }
 
         // size_t expectedSize = 2; // msg type + rect count
@@ -528,28 +537,28 @@ private:
             // Patch the size field
             uint32_t rleSize = (uint32_t)(packet.size() - startPos - 4); // size of RLE data excluding the size field itself
             memcpy(&packet[startPos], &rleSize, 4);
-            if (!debugHasPrintedFirst_) {
-                LOG_DEBUG << "RLE encoded rect: " << rleSize << " bytes (raw would be " << rawSize << ")\n";
-                LOG_DEBUG << "RLE escape color: 0x" << std::hex << rleEscapeColor << std::dec << "\n";
-                // Print original rect pixel data for debugging
-                std::string hexDump;
-                for (int y = rect.y; y < rect.y + rect.h; ++y) {
-                    for (int x = rect.x; x < rect.x + rect.w; ++x) {
-                        hexDump += std::format("{:04X} ", frame.at(x, y));
-                    }
-                }
-                LOG_DEBUG << "Original rect pixel data:\n" << hexDump << "\n";
-                for (const auto& [color, length] : runs) {
-                    LOG_DEBUG << "  Color: 0x" << std::hex << color << std::dec << " Length: " << length << "\n";
-                }
-                // Print RLE encoded data for debugging
-                std::string rleHexDump;
-                for (size_t i = startPos + 4; i < packet.size(); ++i) {
-                    rleHexDump += std::format("{:02X} ", packet[i]);
-                }
-                LOG_DEBUG << "RLE encoded data:\n" << rleHexDump << "\n";
-                debugHasPrintedFirst_ = true;
-            }
+            // if (!debugHasPrintedFirst_) {
+            //     LOG_DEBUG << "RLE encoded rect: " << rleSize << " bytes (raw would be " << rawSize << ")\n";
+            //     LOG_DEBUG << "RLE escape color: 0x" << std::hex << rleEscapeColor << std::dec << "\n";
+            //     // Print original rect pixel data for debugging
+            //     std::string hexDump;
+            //     for (int y = rect.y; y < rect.y + rect.h; ++y) {
+            //         for (int x = rect.x; x < rect.x + rect.w; ++x) {
+            //             hexDump += std::format("{:04X} ", frame.at(x, y));
+            //         }
+            //     }
+            //     LOG_DEBUG << "Original rect pixel data:\n" << hexDump << "\n";
+            //     for (const auto& [color, length] : runs) {
+            //         LOG_DEBUG << "  Color: 0x" << std::hex << color << std::dec << " Length: " << length << "\n";
+            //     }
+            //     // Print RLE encoded data for debugging
+            //     std::string rleHexDump;
+            //     for (size_t i = startPos + 4; i < packet.size(); ++i) {
+            //         rleHexDump += std::format("{:02X} ", packet[i]);
+            //     }
+            //     LOG_DEBUG << "RLE encoded data:\n" << rleHexDump << "\n";
+            //     debugHasPrintedFirst_ = true;
+            // }
             return true;
         } else {
             // Not worth encoding, append raw data

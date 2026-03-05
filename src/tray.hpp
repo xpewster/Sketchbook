@@ -28,7 +28,8 @@ enum TrayMenuID {
     MENU_MODE_STREAMING = 7,
     MENU_MODE_FLASH = 8,
     MENU_MODE_FLASH_MEM = 9,
-    MENU_MEMFLASH = 10,
+    MENU_RECONNECT_WIFI = 10,
+    MENU_MEMFLASH = 11,
     MENU_SKIN_BASE = 100  // Skin submenu items start at 100
 };
 
@@ -53,6 +54,7 @@ private:
     std::atomic<bool> shouldSetFlashMode;
     std::atomic<bool> shouldSetFlashModeMemFlash;
     std::atomic<bool> shouldMemFlash;
+    std::atomic<bool> shouldReconnectWifi;
     std::atomic<int> selectedSkinIndex;  // -1 means no selection
     std::atomic<bool> running;
 
@@ -164,6 +166,8 @@ private:
             // Do nothing if Connecting
         } else if (cmd == MENU_REFRESH_SKIN) {
             shouldRefreshSkin = true;
+        } else if (cmd == MENU_RECONNECT_WIFI) {
+            shouldReconnectWifi = true;
         } else if (cmd == MENU_RESET_BOARD) {
             shouldResetBoard = true;
         } else if (cmd == MENU_FRAME_LOCK) {
@@ -221,11 +225,11 @@ private:
         
         // Add MemFlash item if flash mode is on
         if (isFlashMode) {
-            // Find position of "Reset board" and insert before it
+            // Find position of "Reconnect WiFi" and insert before it
             int menuCount = GetMenuItemCount(hMenu);
             int insertPos = -1;
             for (int i = 0; i < menuCount; i++) {
-                if (GetMenuItemID(hMenu, i) == MENU_RESET_BOARD) {
+                if (GetMenuItemID(hMenu, i) == MENU_RECONNECT_WIFI) {
                     insertPos = i;
                     break;
                 }
@@ -382,6 +386,7 @@ private:
         AppendMenuW(hMenu, MF_SEPARATOR, 0, NULL);
         AppendMenuW(hMenu, MF_STRING, MENU_CONNECT, L"Connect");
         AppendMenuW(hMenu, MF_STRING | MF_POPUP, (UINT_PTR)hModeMenu, L"Change mode");
+        AppendMenuW(hMenu, MF_STRING, MENU_RECONNECT_WIFI, L"Reconnect Wi-Fi");
         AppendMenuW(hMenu, MF_STRING, MENU_RESET_BOARD, L"Reset board");
         AppendMenuW(hMenu, MF_SEPARATOR, 0, NULL);
         AppendMenuW(hMenu, MF_STRING, MENU_CLOSE, L"Close");
@@ -417,6 +422,7 @@ public:
           shouldDisconnect(false), shouldRefreshSkin(false), shouldResetBoard(false),
           shouldToggleFrameLock(false), shouldSetStreamingMode(false),
           shouldSetFlashMode(false), shouldSetFlashModeMemFlash(false), shouldMemFlash(false),
+          shouldReconnectWifi(false),
           selectedSkinIndex(-1),
           running(false), connectionState(ConnectionState::Disconnected),
           flashModeState(false), frameLockState(false),
@@ -492,12 +498,10 @@ public:
         return shouldToggleFrameLock.exchange(false);
     }
     
-    // Check if user wants to switch to streaming mode
     bool ShouldSetStreamingMode() {
         return shouldSetStreamingMode.exchange(false);
     }
     
-    // Check if user wants to enable flash mode
     bool ShouldSetFlashMode() {
         return shouldSetFlashMode.exchange(false);
     }
@@ -507,9 +511,12 @@ public:
         return shouldSetFlashModeMemFlash.exchange(false);
     }
     
-    // Check if user clicked top-level MemFlash
     bool ShouldMemFlash() {
         return shouldMemFlash.exchange(false);
+    }
+    
+    bool ShouldReconnectWifi() {
+        return shouldReconnectWifi.exchange(false);
     }
     
     int GetSelectedSkinIndex() {

@@ -15,6 +15,7 @@ namespace protocol {
     constexpr uint8_t MSG_FLASH_DATA = 0x03;
     constexpr uint8_t MSG_RESET = 0x04;
     constexpr uint8_t MSG_SET_MODE = 0x05;
+    constexpr uint8_t MSG_RECONNECT = 0x06;
     
     // Mode constants
     constexpr uint8_t MODE_FULL_STREAMING = 0x00;
@@ -119,6 +120,12 @@ public:
     bool sendReset() {
         if (!connection_) return false;
         uint8_t cmd = protocol::MSG_RESET;
+        return connection_->sendPacket(&cmd, 1);
+    }
+
+    bool sendReconnect() {
+        if (!connection_) return false;
+        uint8_t cmd = protocol::MSG_RECONNECT;
         return connection_->sendPacket(&cmd, 1);
     }
 
@@ -346,43 +353,13 @@ private:
         
         // Build flash stats header
         uint8_t rectCount = min((size_t)255, rects.size());
-        std::vector<uint8_t> header = stats.serialize(rectCount);
-        
-        // Build dirty rect data (same format as normal mode)
-        std::vector<uint8_t> rectData;
-        if (rectCount > 0) {
-            // Rect headers
-            for (size_t i = 0; i < rectCount; i++) {
-                const auto& r = rects[i];
-                rectData.push_back(r.x & 0xFF);
-                rectData.push_back((r.x >> 8) & 0xFF);
-                rectData.push_back(r.y & 0xFF);
-                rectData.push_back((r.y >> 8) & 0xFF);
-                rectData.push_back(r.w & 0xFF);
-                rectData.push_back((r.w >> 8) & 0xFF);
-                rectData.push_back(r.h & 0xFF);
-                rectData.push_back((r.h >> 8) & 0xFF);
-            }
-            
-            // Rect pixel data
-            for (size_t i = 0; i < rectCount; i++) {
-                const auto& r = rects[i];
-                for (int y = r.y; y < r.y + r.h; y++) {
-                    for (int x = r.x; x < r.x + r.w; x++) {
-                        uint16_t px = frame.getPixel(x, y);
-                        rectData.push_back(px & 0xFF);
-                        rectData.push_back((px >> 8) & 0xFF);
-                    }
-                }
-            }
-        }
-        
+        std::vector<uint8_t> header = stats.serialize();
+
         // Combine and send
         std::vector<uint8_t> packet;
-        packet.reserve(header.size() + rectData.size());
+        packet.reserve(header.size() + 4 + rectCount * 12); // Reserve base amount of space for header + rect headers
         packet.insert(packet.end(), header.begin(), header.end());
-        packet.insert(packet.end(), rectData.begin(), rectData.end());
-        
+        dirtyTracker_.appendDirtyRectData(packet, frame, rects, rleEnabled, rleEscapeColor, colorMode);
         // Update stats
         {
             std::lock_guard<std::mutex> slock(statsMutex_);
