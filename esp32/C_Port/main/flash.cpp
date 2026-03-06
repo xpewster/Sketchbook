@@ -1,8 +1,12 @@
 #include "flash.h"
+
 #include "storage.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "esp_heap_caps.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "freertos/semphr.h"
 #include <cstring>
 #include <cmath>
 #include <cstdio>
@@ -10,17 +14,232 @@
 
 static const char* TAG = "flash";
 
+// Byte-swap RGB565 for DMA buffer.
+// Our pixel data is little-endian (native ESP32), but the LCD_CAM parallel
+// interface shifts out bytes in memory order. LovyanGFX's pushImage handled
+// this via setSwapBytes(true); since we write directly, we swap on write.
+// __builtin_bswap16 compiles to a single instruction on Xtensa.
+static inline uint16_t SWAP16(uint16_t v) { return __builtin_bswap16(v); }
+
+// ============================================================
+// Composite Parameters — passed to both cores
+// ============================================================
+
+struct CompositeParams {
+    uint16_t*       dst;
+    int             dst_stride;
+    int             y_start;       // inclusive
+    int             y_end;         // exclusive
+
+    const uint8_t*  dirty_rows;    // Bitmask — skip clean rows
+
+    const uint16_t* bg;
+    int             bg_w, bg_h;
+
+    const uint16_t* stream;
+    bool            stream_active;
+
+    const uint16_t* wth;
+    int             wth_w, wth_h, wth_x, wth_y;
+
+    const uint16_t* chr;
+    int             chr_w, chr_h, chr_x, chr_y;
+};
+
+// ============================================================
+// Optimized Transparent Row Composite
+// ============================================================
+
+static void composite_row_transparent(uint16_t* __restrict dst,
+                                       const uint16_t* __restrict src,
+                                       int count) {
+    constexpr uint32_t TRANS_PAIR = ((uint32_t)TRANSPARENT_COLOR << 16) | TRANSPARENT_COLOR;
+    int x = 0;
+
+    // Align to 32-bit
+    if (((uintptr_t)&src[x] & 2) && x < count) {
+        uint16_t px = src[x];
+        if (px != TRANSPARENT_COLOR) dst[x] = SWAP16(px);
+        x++;
+    }
+
+    // Paired 32-bit reads — skip two transparent pixels with one branch
+    for (; x + 1 < count; x += 2) {
+        uint32_t pair = *(const uint32_t*)&src[x];
+        if (pair == TRANS_PAIR) continue;
+        uint16_t px0 = (uint16_t)(pair);
+        uint16_t px1 = (uint16_t)(pair >> 16);
+        if (px0 != TRANSPARENT_COLOR) dst[x]     = SWAP16(px0);
+        if (px1 != TRANSPARENT_COLOR) dst[x + 1] = SWAP16(px1);
+    }
+
+    if (x < count) {
+        uint16_t px = src[x];
+        if (px != TRANSPARENT_COLOR) dst[x] = SWAP16(px);
+    }
+}
+
+// ============================================================
+// Core Composite: process dirty rows in [y_start, y_end)
+// ============================================================
+
+static inline bool is_row_dirty(const uint8_t* bitmask, int y) {
+    return bitmask[y >> 3] & (1 << (y & 7));
+}
+
+static void composite_layers_range(const CompositeParams& p) {
+    for (int y = p.y_start; y < p.y_end; y++) {
+
+        // Skip clean rows — DMA buffer still has last frame's correct content
+        if (!is_row_dirty(p.dirty_rows, y)) continue;
+
+        uint16_t* drow = &p.dst[y * p.dst_stride];
+
+        // --- Base layer: background + stream fused ---
+        // All writes to drow use SWAP16() for DMA byte order.
+        if (p.bg && y < p.bg_h) {
+            const uint16_t* bg_row = &p.bg[y * p.bg_w];
+
+            if (p.stream_active && p.stream) {
+                const uint16_t* st_row = &p.stream[y * FRAME_WIDTH];
+                int w = (p.bg_w < FRAME_WIDTH) ? p.bg_w : FRAME_WIDTH;
+
+                int x = 0;
+                constexpr uint32_t TRANS_PAIR =
+                    ((uint32_t)TRANSPARENT_COLOR << 16) | TRANSPARENT_COLOR;
+
+                if (((uintptr_t)&st_row[x] & 2) && x < w) {
+                    uint16_t s = st_row[x];
+                    drow[x] = SWAP16((s != TRANSPARENT_COLOR) ? s : bg_row[x]);
+                    x++;
+                }
+
+                for (; x + 1 < w; x += 2) {
+                    uint32_t spair = *(const uint32_t*)&st_row[x];
+                    if (spair == TRANS_PAIR) {
+                        // Both stream pixels transparent — copy bg pair (swapped)
+                        drow[x]     = SWAP16(bg_row[x]);
+                        drow[x + 1] = SWAP16(bg_row[x + 1]);
+                    } else {
+                        uint16_t s0 = (uint16_t)(spair);
+                        uint16_t s1 = (uint16_t)(spair >> 16);
+                        drow[x]     = SWAP16((s0 != TRANSPARENT_COLOR) ? s0 : bg_row[x]);
+                        drow[x + 1] = SWAP16((s1 != TRANSPARENT_COLOR) ? s1 : bg_row[x + 1]);
+                    }
+                }
+
+                if (x < w) {
+                    uint16_t s = st_row[x];
+                    drow[x] = SWAP16((s != TRANSPARENT_COLOR) ? s : bg_row[x]);
+                }
+            } else {
+                // No stream — copy bg row with byte swap
+                int cw = (p.bg_w < FRAME_WIDTH) ? p.bg_w : FRAME_WIDTH;
+                for (int x = 0; x < cw; x++) {
+                    drow[x] = SWAP16(bg_row[x]);
+                }
+            }
+        } else {
+            if (p.stream_active && p.stream) {
+                const uint16_t* st_row = &p.stream[y * FRAME_WIDTH];
+                for (int x = 0; x < FRAME_WIDTH; x++) {
+                    uint16_t s = st_row[x];
+                    drow[x] = (s != TRANSPARENT_COLOR) ? SWAP16(s) : 0;
+                }
+            } else {
+                memset(drow, 0, FRAME_WIDTH * 2);
+            }
+        }
+
+        // --- Weather overlay ---
+        if (p.wth) {
+            int wy0 = p.wth_y, wy1 = p.wth_y + p.wth_h;
+            if (y >= wy0 && y < wy1) {
+                int sy = y - wy0;
+                int sx0 = 0, dx = p.wth_x;
+                if (dx < 0) { sx0 = -dx; dx = 0; }
+                int draw_w = p.wth_w - sx0;
+                if (dx + draw_w > FRAME_WIDTH) draw_w = FRAME_WIDTH - dx;
+                if (draw_w > 0) {
+                    composite_row_transparent(
+                        &drow[dx], &p.wth[sy * p.wth_w + sx0], draw_w);
+                }
+            }
+        }
+
+        // --- Character overlay ---
+        if (p.chr) {
+            int cy0 = p.chr_y, cy1 = p.chr_y + p.chr_h;
+            if (y >= cy0 && y < cy1) {
+                int sy = y - cy0;
+                int sx0 = 0, dx = p.chr_x;
+                if (dx < 0) { sx0 = -dx; dx = 0; }
+                int draw_w = p.chr_w - sx0;
+                if (dx + draw_w > FRAME_WIDTH) draw_w = FRAME_WIDTH - dx;
+                if (draw_w > 0) {
+                    composite_row_transparent(
+                        &drow[dx], &p.chr[sy * p.chr_w + sx0], draw_w);
+                }
+            }
+        }
+    }
+}
+
+// ============================================================
+// Dual-Core Helper Task (runs on Core 1)
+// ============================================================
+
+static TaskHandle_t      s_helper_task = nullptr;
+static SemaphoreHandle_t s_helper_done = nullptr;
+static CompositeParams   s_helper_params;
+
+static void composite_helper_task(void*) {
+    while (true) {
+        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+        composite_layers_range(s_helper_params);
+        xSemaphoreGive(s_helper_done);
+    }
+}
+
 // ============================================================
 // Construction / Destruction
 // ============================================================
 
 FlashModeManager::FlashModeManager() {
     _start_us = esp_timer_get_time();
+    mark_all_dirty();
 }
 
 FlashModeManager::~FlashModeManager() {
-    // GifSprite destructors handle their own PSRAM cleanup
     if (_stream) heap_caps_free(_stream);
+}
+
+// ============================================================
+// Dirty Row Tracking
+// ============================================================
+
+void FlashModeManager::mark_all_dirty() {
+    memset(_dirty_rows, 0xFF, DIRTY_BITMASK_BYTES);
+}
+
+void FlashModeManager::mark_rows_dirty(int y, int h) {
+    if (h <= 0) return;
+    int y0 = (y < 0) ? 0 : y;
+    int y1 = y + h;
+    if (y1 > FRAME_HEIGHT) y1 = FRAME_HEIGHT;
+    for (int row = y0; row < y1; row++) {
+        _dirty_rows[row >> 3] |= (1 << (row & 7));
+    }
+}
+
+void FlashModeManager::mark_stream_rows_dirty(int y, int h) {
+    _stream_has_content = true;
+    mark_rows_dirty(y, h);
+}
+
+void FlashModeManager::mark_stream_dirty(int x, int y, int w, int h) {
+    (void)x; (void)w;
+    mark_stream_rows_dirty(y, h);
 }
 
 // ============================================================
@@ -50,6 +269,7 @@ bool FlashModeManager::init(const char* config_path) {
     for (int i = 0; i < FRAME_PIXELS; i++) {
         _stream[i] = TRANSPARENT_COLOR;
     }
+    _stream_has_content = false;
 
     const char* dir = FLASH_ASSETS_DIR;
 
@@ -142,6 +362,25 @@ bool FlashModeManager::init(const char* config_path) {
         decode_first(_weather[i]);
     }
 
+    // Create dual-core composite helper (once)
+    if (!s_helper_task) {
+        s_helper_done = xSemaphoreCreateBinary();
+        xTaskCreatePinnedToCore(
+            composite_helper_task,
+            "comp1",
+            4096,
+            nullptr,
+            5,
+            &s_helper_task,
+            1              // Core 1 (network task is on Core 0)
+        );
+        ESP_LOGI(TAG, "Composite helper task created on Core 1");
+    }
+
+    // First frame must composite everything
+    _force_full = true;
+    mark_all_dirty();
+
     _loaded = true;
     ESP_LOGI(TAG, "Flash mode initialized. Free PSRAM: %lu KB",
              heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024);
@@ -166,7 +405,6 @@ bool FlashModeManager::load_sprite(Sprite& s, const char* path, int base_x, int 
         return true;
     }
 
-    // Static R565 image
     if (!s.image.load(path)) return false;
     s.w = s.image.width;
     s.h = s.image.height;
@@ -184,18 +422,32 @@ void FlashModeManager::update_from_data(const FlashDataHeader& data) {
     int new_state = 0;
     if (data.flags & FLAG_CPU_HOT) new_state = 2;
     else if (data.flags & FLAG_CPU_WARM) new_state = 1;
-    _char_state = new_state;
 
+    // Character variant changed — mark old + new bboxes dirty
+    if (new_state != _char_state) {
+        Sprite* old_chr = active_char();
+        if (old_chr) mark_rows_dirty(old_chr->base_y, old_chr->h);
+        _char_state = new_state;
+        Sprite* new_chr = active_char();
+        if (new_chr) mark_rows_dirty(new_chr->base_y, new_chr->h);
+    }
+
+    int old_weather = _weather_index;
     if (data.flags & FLAG_WEATHER_AVAIL) {
         _weather_index = data.weather_index;
         if (_weather_index >= NUM_WEATHER_ICONS) _weather_index = -1;
     } else {
         _weather_index = -1;
     }
-}
 
-void FlashModeManager::mark_stream_dirty(int x, int y, int w, int h) {
-    (void)x; (void)y; (void)w; (void)h;
+    // Weather icon changed — mark old + new bboxes dirty
+    if (_weather_index != old_weather) {
+        if (old_weather >= 0 && old_weather < NUM_WEATHER_ICONS && _weather[old_weather].loaded())
+            mark_rows_dirty(_weather[old_weather].base_y, _weather[old_weather].h);
+        Sprite* wth = active_weather();
+        if (wth)
+            mark_rows_dirty(wth->base_y, wth->h);
+    }
 }
 
 // ============================================================
@@ -222,7 +474,7 @@ Sprite* FlashModeManager::active_weather() {
 }
 
 // ============================================================
-// Animation
+// Animation (sets dirty flags when frames advance)
 // ============================================================
 
 void FlashModeManager::advance_animations() {
@@ -234,6 +486,8 @@ void FlashModeManager::advance_animations() {
         int delay_ms = _bg.gif.next_frame(_decoder);
         _bg.pixels = _bg.gif.pixels();
         _bg_gif_next_us = now + (int64_t)delay_ms * 1000;
+        // Background covers every row
+        mark_all_dirty();
     }
 
     // Character GIF (active variant only)
@@ -243,6 +497,8 @@ void FlashModeManager::advance_animations() {
         int delay_ms = chr->gif.next_frame(_decoder);
         chr->pixels = chr->gif.pixels();
         _char_gif_next_us = now + (int64_t)delay_ms * 1000;
+        // Character frame changed — mark its bbox dirty
+        mark_rows_dirty(chr->base_y, chr->h);
     }
 
     // Weather GIF (active icon only)
@@ -252,91 +508,139 @@ void FlashModeManager::advance_animations() {
         int delay_ms = wth->gif.next_frame(_decoder);
         wth->pixels = wth->gif.pixels();
         _weather_gif_next_us = now + (int64_t)delay_ms * 1000;
+        // Weather frame changed — mark its bbox dirty
+        mark_rows_dirty(wth->base_y, wth->h);
     }
 }
 
 // ============================================================
-// Compositing
+// Compositing — dirty-aware, dual-core, fused layers
 // ============================================================
 
-void FlashModeManager::tick_and_composite(uint16_t* framebuf, int stride) {
+int FlashModeManager::tick_and_composite(uint16_t* framebuf, int stride) {
+    // Advance animations (marks dirty rows when GIF frames change)
     advance_animations();
 
-    // Layer 1: Background
-    if (_bg.loaded()) {
-        composite_layer_opaque(framebuf, stride, _bg.pixels, _bg.w, _bg.h);
-    } else {
-        // Clear visible area row by row (stride may differ from FRAME_WIDTH)
-        for (int y = 0; y < FRAME_HEIGHT; y++) {
-            memset(&framebuf[y * stride], 0, FRAME_WIDTH * 2);
-        }
-    }
-
-    // Layer 2: Stream overlay (magenta = transparent)
-    // _stream is always FRAME_WIDTH-strided (receives dirty rects at that stride)
-    composite_layer_transparent(framebuf, stride, _stream, FRAME_WIDTH, FRAME_HEIGHT, 0, 0);
-
-    // Layer 3: Weather icon
-    Sprite* wth = active_weather();
-    if (wth && wth->pixels) {
-        composite_layer_transparent(framebuf, stride, wth->pixels,
-                                    wth->w, wth->h, wth->base_x, wth->base_y);
-    }
-
-    // Layer 4: Character (with bobbing offset on X axis)
+    // Resolve active sprites
     Sprite* chr = active_char();
+    Sprite* wth = active_weather();
+
+    int bob_offset = 0;
+    if (chr && _bob_enabled) {
+        int64_t now = esp_timer_get_time();
+        float elapsed_s = (float)(now - _start_us) / 1000000.0f;
+        bob_offset = (int)(sinf(elapsed_s * _bob_speed * 2.0f * M_PI) * _bob_amp);
+    }
+
+    // --- Compute current positions and mark dirty from movement ---
+
+    int cur_chr_x = 0, cur_chr_y = 0, cur_chr_w = 0, cur_chr_h = 0;
     if (chr && chr->pixels) {
-        int bob_offset = 0;
-        if (_bob_enabled) {
-            int64_t now = esp_timer_get_time();
-            float elapsed_s = (float)(now - _start_us) / 1000000.0f;
-            bob_offset = (int)(sinf(elapsed_s * _bob_speed * 2.0f * M_PI) * _bob_amp);
-        }
-        composite_layer_transparent(framebuf, stride, chr->pixels,
-                                    chr->w, chr->h,
-                                    chr->base_x + bob_offset, chr->base_y);
+        cur_chr_x = chr->base_x + bob_offset;
+        cur_chr_y = chr->base_y;
+        cur_chr_w = chr->w;
+        cur_chr_h = chr->h;
     }
-}
 
-void FlashModeManager::composite_layer_opaque(uint16_t* dst, int dst_stride,
-                                               const uint16_t* src,
-                                               int sw, int sh) {
-    int cw = (sw < FRAME_WIDTH) ? sw : FRAME_WIDTH;
-    int ch = (sh < FRAME_HEIGHT) ? sh : FRAME_HEIGHT;
+    int cur_wth_x = 0, cur_wth_y = 0, cur_wth_w = 0, cur_wth_h = 0;
+    if (wth && wth->pixels) {
+        cur_wth_x = wth->base_x;
+        cur_wth_y = wth->base_y;
+        cur_wth_w = wth->w;
+        cur_wth_h = wth->h;
+    }
 
-    // Fast path: if dst stride matches source width and visible width, single memcpy
-    if (cw == dst_stride && sw == dst_stride) {
-        memcpy(dst, src, (size_t)cw * ch * 2);
+    if (!_force_full) {
+        // Character moved (bobbing) — mark old and new bbox rows dirty.
+        // X movement doesn't change which rows are affected, but the content
+        // on those rows changes, so any x-shift marks the full row range.
+        if (cur_chr_x != _prev_chr_x || cur_chr_y != _prev_chr_y ||
+            cur_chr_w != _prev_chr_w || cur_chr_h != _prev_chr_h) {
+            mark_rows_dirty(_prev_chr_y, _prev_chr_h);  // old position
+            mark_rows_dirty(cur_chr_y, cur_chr_h);       // new position
+        }
+
+        // Weather moved or changed size
+        if (cur_wth_x != _prev_wth_x || cur_wth_y != _prev_wth_y ||
+            cur_wth_w != _prev_wth_w || cur_wth_h != _prev_wth_h) {
+            mark_rows_dirty(_prev_wth_y, _prev_wth_h);
+            mark_rows_dirty(cur_wth_y, cur_wth_h);
+        }
+    }
+
+    _force_full = false;
+
+    // Save positions for next frame
+    _prev_chr_x = cur_chr_x; _prev_chr_y = cur_chr_y;
+    _prev_chr_w = cur_chr_w; _prev_chr_h = cur_chr_h;
+    _prev_wth_x = cur_wth_x; _prev_wth_y = cur_wth_y;
+    _prev_wth_w = cur_wth_w; _prev_wth_h = cur_wth_h;
+
+    // --- Build composite params ---
+
+    CompositeParams params = {};
+    params.dst        = framebuf;
+    params.dst_stride = stride;
+    params.dirty_rows = _dirty_rows;
+
+    if (_bg.loaded()) {
+        params.bg   = _bg.pixels;
+        params.bg_w = _bg.w;
+        params.bg_h = _bg.h;
+    }
+
+    params.stream        = _stream;
+    params.stream_active = _stream_has_content;
+
+    if (wth && wth->pixels) {
+        params.wth   = wth->pixels;
+        params.wth_w = cur_wth_w;
+        params.wth_h = cur_wth_h;
+        params.wth_x = cur_wth_x;
+        params.wth_y = cur_wth_y;
+    }
+
+    if (chr && chr->pixels) {
+        params.chr   = chr->pixels;
+        params.chr_w = cur_chr_w;
+        params.chr_h = cur_chr_h;
+        params.chr_x = cur_chr_x;
+        params.chr_y = cur_chr_y;
+    }
+
+    // --- Dispatch to core(s) --- Toggleable
+    constexpr bool USE_DUAL_CORE = true;
+
+    if (USE_DUAL_CORE && s_helper_task) {
+        int mid = FRAME_HEIGHT / 2;
+
+        s_helper_params = params;
+        s_helper_params.y_start = mid;
+        s_helper_params.y_end   = FRAME_HEIGHT;
+        xTaskNotifyGive(s_helper_task);
+
+        params.y_start = 0;
+        params.y_end   = mid;
+        composite_layers_range(params);
+
+        xSemaphoreTake(s_helper_done, portMAX_DELAY);
     } else {
-        for (int y = 0; y < ch; y++) {
-            memcpy(&dst[y * dst_stride], &src[y * sw], cw * 2);
-        }
+        params.y_start = 0;
+        params.y_end   = FRAME_HEIGHT;
+        composite_layers_range(params);
     }
-}
 
-void FlashModeManager::composite_layer_transparent(uint16_t* dst, int dst_stride,
-                                                     const uint16_t* src,
-                                                     int sw, int sh, int dx, int dy) {
-    int src_x0 = 0, src_y0 = 0;
-    if (dx < 0) { src_x0 = -dx; dx = 0; }
-    if (dy < 0) { src_y0 = -dy; dy = 0; }
-
-    int draw_w = sw - src_x0;
-    int draw_h = sh - src_y0;
-    if (dx + draw_w > FRAME_WIDTH)  draw_w = FRAME_WIDTH - dx;
-    if (dy + draw_h > FRAME_HEIGHT) draw_h = FRAME_HEIGHT - dy;
-
-    if (draw_w <= 0 || draw_h <= 0) return;
-
-    for (int y = 0; y < draw_h; y++) {
-        const uint16_t* srow = &src[(src_y0 + y) * sw + src_x0];
-        uint16_t* drow = &dst[(dy + y) * dst_stride + dx];
-
-        for (int x = 0; x < draw_w; x++) {
-            uint16_t px = srow[x];
-            if (px != TRANSPARENT_COLOR) {
-                drow[x] = px;
-            }
-        }
+    // Count dirty rows for perf monitoring
+    int dirty_count = 0;
+    for (int i = 0; i < DIRTY_BITMASK_BYTES; i++) {
+        // popcount byte
+        uint8_t b = _dirty_rows[i];
+        b = b - ((b >> 1) & 0x55);
+        b = (b & 0x33) + ((b >> 2) & 0x33);
+        dirty_count += (b + (b >> 4)) & 0x0F;
     }
+
+    // Clear dirty bitmask for next frame
+    memset(_dirty_rows, 0, DIRTY_BITMASK_BYTES);
+    return dirty_count;
 }

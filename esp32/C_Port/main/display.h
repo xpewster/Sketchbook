@@ -45,22 +45,12 @@ constexpr bool DISP_DE_IDLE_HIGH = false;
 constexpr uint16_t DISP_STRIDE = DISP_WIDTH + DISP_OVERSCAN_LEFT;  // 360 pixels per row in FB
 
 // ============================================================
-// Panel subclass — exposes the DMA framebuffer pointer
-// ============================================================
-// Panel_RGB::_frame_buffer is protected. Rather than patching LovyanGFX,
-// we subclass Panel_ST7701 and add an accessor.
-
-struct Panel_ST7701_Accessible : public lgfx::Panel_ST7701 {
-    uint8_t* getFrameBuffer() const { return _frame_buffer; }
-};
-
-// ============================================================
 // LGFX Device Class
 // ============================================================
 
 class LGFX : public lgfx::LGFX_Device {
-    Panel_ST7701_Accessible _panel;
-    lgfx::Bus_RGB           _bus;
+    lgfx::Panel_ST7701 _panel;
+    lgfx::Bus_RGB       _bus;
 
 public:
     LGFX() {
@@ -158,13 +148,14 @@ public:
     // ============================================================
     // Direct DMA framebuffer access
     // ============================================================
-    // Bypasses pushImage (which memcpys 450KB every frame) and lets us
-    // composite directly into the buffer the LCD DMA reads from,
-    // matching what CircuitPython does with esp_lcd_rgb_panel_get_frame_buffer.
+    // Bus_RGB::getDMABuffer() returns the PSRAM framebuffer that the LCD_CAM
+    // DMA continuously reads from. Writing here and flushing the CPU cache
+    // bypasses pushImage (which memcpys 450KB every frame), matching what
+    // CircuitPython does with esp_lcd_rgb_panel_get_frame_buffer.
 
     /// Raw DMA framebuffer (full stride including overscan). Returns nullptr before init().
     uint16_t* getFrameBuffer() {
-        return (uint16_t*)_panel.getFrameBuffer();
+        return (uint16_t*)_bus.getDMABuffer(0);
     }
 
     /// Pointer to start of visible area (offset past left overscan).
@@ -180,7 +171,7 @@ extern LGFX gfx;
 
 // Initialize ST7701S via IO expander (must be called BEFORE gfx.init()).
 // Sends the init sequence over bit-banged SPI through the TCA9554,
-// then releases I2C so GPIO 47/48 can be used for RGB data.
+// then releases I2C so GPIO 47/48 can be used.
 bool init_st7701s();
 
 // ============================================================
@@ -191,6 +182,16 @@ bool init_st7701s();
 // cache. Without explicit writeback, DMA may read stale data.
 
 extern "C" int Cache_WriteBack_Addr(uint32_t addr, uint32_t size);
+
+// Byte-swap RGB565 for DMA buffer.
+// Our pixel data is little-endian (native ESP32), but the LCD_CAM parallel
+// interface shifts out bytes in memory order. LovyanGFX's pushImage handled
+// this via setSwapBytes(true); since we write directly, we swap on write.
+// __builtin_bswap16 compiles to a single instruction on Xtensa.
+static inline uint16_t SWAP16(uint16_t v) { return __builtin_bswap16(v); }
+
+// Pre-swapped transparent color for comparisons in the DMA buffer
+constexpr uint16_t TRANSPARENT_COLOR_SWAPPED = 0x1FF8;  // __builtin_bswap16(0xF81F)
 
 inline void display_flush_cache() {
     uint16_t* fb = gfx.getFrameBuffer();

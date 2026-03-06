@@ -178,12 +178,16 @@ void network_cleanup() {
 // Instead of gfx.pushImage() (which memcpys 450KB from our buffer into
 // LovyanGFX's internal DMA buffer), we composite/copy directly into the
 // DMA buffer and flush the CPU cache so the LCD peripheral sees our writes.
-// This matches CircuitPython's approach (see DotClockFramebuffer.c).
 
 /// Copy streaming-mode framebuf (FRAME_WIDTH stride) into DMA visible area (DISP_STRIDE stride).
+/// Swaps bytes for LCD DMA byte order (same as setSwapBytes(true) in LovyanGFX).
 static void blit_to_display(const uint16_t* src, uint16_t* dma_visible) {
     for (int y = 0; y < FRAME_HEIGHT; y++) {
-        memcpy(&dma_visible[y * DISP_STRIDE], &src[y * FRAME_WIDTH], FRAME_WIDTH * 2);
+        const uint16_t* srow = &src[y * FRAME_WIDTH];
+        uint16_t* drow = &dma_visible[y * DISP_STRIDE];
+        for (int x = 0; x < FRAME_WIDTH; x++) {
+            drow[x] = SWAP16(srow[x]);
+        }
     }
     display_flush_cache();
 }
@@ -199,14 +203,29 @@ static void clear_display(uint16_t* dma_fb) {
 // ============================================================
 // Receives rect_count dirty rects into target buffer (stride = FRAME_WIDTH).
 // Used by both MSG_DIRTY_RECTS and MSG_FLASH_DATA.
+// Optionally reports the bounding y-range of all received rects for dirty tracking.
 
 static RecvResult receive_dirty_rects(int sock, uint16_t* target,
                                        uint8_t rect_count, ColorMode colorMode,
-                                       uint16_t rle_escape_color) {
+                                       uint16_t rle_escape_color,
+                                       int* out_y_min = nullptr,
+                                       int* out_y_max = nullptr) {
     DirtyRect rects[256];
     if (!recv_exact(sock, rects, rect_count * sizeof(DirtyRect))) {
         ESP_LOGE(TAG, "Failed to receive dirty rects");
         return RecvResult::ERROR;
+    }
+
+    // Compute bounding y-range across all rects
+    if (out_y_min && out_y_max) {
+        int ymin = FRAME_HEIGHT, ymax = 0;
+        for (int i = 0; i < rect_count; i++) {
+            if (rects[i].y < ymin) ymin = rects[i].y;
+            int bottom = rects[i].y + rects[i].h;
+            if (bottom > ymax) ymax = bottom;
+        }
+        *out_y_min = ymin;
+        *out_y_max = ymax;
     }
     // ESP_LOGI(TAG, "Receiving %d dirty rects (ColorMode=%d, EscapeColor=0x%04X)",
     //          rect_count, colorMode, rle_escape_color);
@@ -402,12 +421,18 @@ RecvResult recv_frame(int sock, uint16_t* framebuf, uint8_t& current_mode) {
             uint16_t* target = s_flash_mgr.is_loaded() ? s_flash_mgr.stream_pixels() : nullptr;
 
             if (target) {
+                int y_min = 0, y_max = 0;
                 RecvResult rr = receive_dirty_rects(sock, target,
                                                      fh.rect_count, mode,
-                                                     fh.rle_escape_color);
+                                                     fh.rle_escape_color,
+                                                     &y_min, &y_max);
                 if (rr != RecvResult::OK) {
                     ESP_LOGE(TAG, "Failed to receive flash dirty rects");
                     return rr;
+                }
+                // Mark only the affected rows for recomposite
+                if (y_max > y_min) {
+                    s_flash_mgr.mark_stream_rows_dirty(y_min, y_max - y_min);
                 }
             } else {
                 // Flash manager not ready — drain the rect data so the stream stays in sync
@@ -483,7 +508,7 @@ RecvResult recv_frame(int sock, uint16_t* framebuf, uint8_t& current_mode) {
 }
 
 // ============================================================
-// TCP Server (called from network_task)
+// TCP Server (network_task)
 // ============================================================
 
 void tcp_server_start(uint16_t* framebuf) {
@@ -523,7 +548,7 @@ void tcp_server_start(uint16_t* framebuf) {
 
     ESP_LOGI(TAG, "TCP server listening on port %d", TCP_PORT);
 
-    // Get direct access to the LCD DMA framebuffer via Panel_ST7701_Accessible.
+    // Get direct access to the LCD DMA framebuffer via Bus_RGB::getDMABuffer().
     // This lets us write pixels directly where the LCD peripheral reads,
     // eliminating the 450KB pushImage memcpy every frame.
     uint16_t* dma_fb = gfx.getFrameBuffer();
@@ -562,6 +587,7 @@ void tcp_server_start(uint16_t* framebuf) {
         int64_t recv_us_total = 0;
         int64_t blit_us_total = 0;
         int64_t composite_us_total = 0;
+        int     dirty_rows_total = 0;
 
         while (true) {
             int64_t t0 = esp_timer_get_time();
@@ -572,11 +598,13 @@ void tcp_server_start(uint16_t* framebuf) {
 
                 if (current_mode == proto::MODE_FLASH && s_flash_mgr.is_loaded()) {
                     // Flash mode: composite directly into DMA framebuffer
+                    int rows;
                     if (dma_visible) {
-                        s_flash_mgr.tick_and_composite(dma_visible, DISP_STRIDE);
+                        rows = s_flash_mgr.tick_and_composite(dma_visible, DISP_STRIDE);
                     } else {
-                        s_flash_mgr.tick_and_composite(framebuf);
+                        rows = s_flash_mgr.tick_and_composite(framebuf);
                     }
+                    dirty_rows_total += rows;
                 }
                 int64_t t2 = esp_timer_get_time();
 
@@ -591,6 +619,7 @@ void tcp_server_start(uint16_t* framebuf) {
                     }
                 } else {
                     // Fallback: use LovyanGFX pushImage
+                    ESP_LOGW(TAG, "DMA framebuffer not available — using pushImage (slow)");
                     gfx.pushImage(DISP_OVERSCAN_LEFT, 0, FRAME_WIDTH, FRAME_HEIGHT, framebuf);
                 }
 
@@ -600,16 +629,24 @@ void tcp_server_start(uint16_t* framebuf) {
                 blit_us_total += (t3 - t2);
                 frame_count++;
             } else if (result == RecvResult::NO_CHANGE) {
+                int64_t t2, t3;
                 if (current_mode == proto::MODE_FLASH && s_flash_mgr.is_loaded()) {
                     // Still animate and composite even with no new data
                     if (dma_visible) {
                         s_flash_mgr.tick_and_composite(dma_visible, DISP_STRIDE);
+                        t2 = esp_timer_get_time();
                         display_flush_cache();
                     } else {
                         s_flash_mgr.tick_and_composite(framebuf);
+                        t2 = esp_timer_get_time();
                         gfx.pushImage(DISP_OVERSCAN_LEFT, 0, FRAME_WIDTH, FRAME_HEIGHT, framebuf);
                     }
                 }
+                t3 = esp_timer_get_time();
+                recv_us_total += (t1 - t0);
+                composite_us_total += (t2 - t1);
+                blit_us_total += (t3 - t2);
+                frame_count++;
             } else if (result == RecvResult::TIMEOUT) {
                 if (current_mode == proto::MODE_FLASH && s_flash_mgr.is_loaded()) {
                     // Timeout in flash mode: keep animating
@@ -653,11 +690,13 @@ void tcp_server_start(uint16_t* framebuf) {
                 float avg_composite_ms = frame_count ? (composite_us_total / 1000.0f / frame_count) : 0;
                 float avg_blit_ms = frame_count ? (blit_us_total / 1000.0f / frame_count) : 0;
                 float throughput_mbps = frame_count ? (frame_count * FRAME_BYTES * 8.0f / elapsed) : 0;
-                ESP_LOGI(TAG, "FPS: %.1f | recv: %.1fms | composite: %.1fms | blit: %.1fms | %.1f Mbps (%d frames)",
-                         fps, avg_recv_ms, avg_composite_ms, avg_blit_ms, throughput_mbps, frame_count);
+                float avg_dirty_rows = frame_count ? ((float)dirty_rows_total / frame_count) : 0;
+                ESP_LOGI(TAG, "Averages: FPS: %.1f | recv: %.1fms | composite: %.1fms (%.0f dirty rows) | blit: %.1fms | %.1f Mbps (%d frames)",
+                         fps, avg_recv_ms, avg_composite_ms, avg_dirty_rows, avg_blit_ms, throughput_mbps, frame_count);
                 frame_count = 0;
                 recv_us_total = 0;
                 composite_us_total = 0;
+                dirty_rows_total = 0;
                 blit_us_total = 0;
                 fps_start = now;
             }
