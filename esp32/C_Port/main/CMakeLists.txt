@@ -6,6 +6,7 @@ idf_component_register(
         "storage.cpp"
         "gif.cpp"
         "flash.cpp"
+        "postprocess.cpp"
     INCLUDE_DIRS "."
     REQUIRES 
         nvs_flash

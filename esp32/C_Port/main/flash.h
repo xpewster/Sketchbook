@@ -43,6 +43,8 @@ public:
     // Mark a region of the stream layer dirty (legacy alias)
     void mark_stream_dirty(int x, int y, int w, int h);
 
+    void mark_all_dirty();
+
     // Advance animations + bobbing, composite only dirty rows into framebuf.
     // stride: distance in pixels between rows in the destination buffer.
     // Returns the number of rows actually composited (for perf monitoring).
@@ -98,7 +100,6 @@ private:
     int       _prev_wth_index = -1;
 
     // Dirty helpers
-    void mark_all_dirty();
     void mark_rows_dirty(int y, int h);
 
     // Helpers

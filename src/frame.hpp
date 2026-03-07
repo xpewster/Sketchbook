@@ -16,6 +16,7 @@ namespace protocol {
     constexpr uint8_t MSG_RESET = 0x04;
     constexpr uint8_t MSG_SET_MODE = 0x05;
     constexpr uint8_t MSG_RECONNECT = 0x06;
+    constexpr uint8_t MSG_SET_BRIGHTNESS = 0x07;
     
     // Mode constants
     constexpr uint8_t MODE_FULL_STREAMING = 0x00;
@@ -127,6 +128,12 @@ public:
         if (!connection_) return false;
         uint8_t cmd = protocol::MSG_RECONNECT;
         return connection_->sendPacket(&cmd, 1);
+    }
+
+    bool sendSetBrightness(uint8_t brightness) {
+        if (!connection_) return false;
+        uint8_t packet[2] = { protocol::MSG_SET_BRIGHTNESS, brightness }; // Last byte reserved
+        return connection_->sendPacket(packet, 2);
     }
 
     void invalidateDirtyTracker() {

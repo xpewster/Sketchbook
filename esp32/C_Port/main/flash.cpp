@@ -1,6 +1,7 @@
 #include "flash.h"
 
 #include "storage.h"
+#include "postprocess.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "esp_heap_caps.h"
@@ -13,12 +14,6 @@
 #include <sys/stat.h>
 
 static const char* TAG = "flash";
-
-// Byte-swap RGB565 for DMA buffer.
-// Our pixel data is little-endian (native ESP32), but the LCD_CAM parallel
-// interface shifts out bytes in memory order. LovyanGFX's pushImage handled
-// this via setSwapBytes(true); since we write directly, we swap on write.
-static inline uint16_t SWAP16(uint16_t v) { return __builtin_bswap16(v); }
 
 // ============================================================
 // Composite Parameters — passed to both cores
@@ -58,7 +53,7 @@ static void composite_row_transparent(uint16_t* __restrict dst,
     // Align to 32-bit
     if (((uintptr_t)&src[x] & 2) && x < count) {
         uint16_t px = src[x];
-        if (px != TRANSPARENT_COLOR) dst[x] = SWAP16(px);
+        if (px != TRANSPARENT_COLOR) dst[x] = pp_pixel(px);
         x++;
     }
 
@@ -68,13 +63,13 @@ static void composite_row_transparent(uint16_t* __restrict dst,
         if (pair == TRANS_PAIR) continue;
         uint16_t px0 = (uint16_t)(pair);
         uint16_t px1 = (uint16_t)(pair >> 16);
-        if (px0 != TRANSPARENT_COLOR) dst[x]     = SWAP16(px0);
-        if (px1 != TRANSPARENT_COLOR) dst[x + 1] = SWAP16(px1);
+        if (px0 != TRANSPARENT_COLOR) dst[x]     = pp_pixel(px0);
+        if (px1 != TRANSPARENT_COLOR) dst[x + 1] = pp_pixel(px1);
     }
 
     if (x < count) {
         uint16_t px = src[x];
-        if (px != TRANSPARENT_COLOR) dst[x] = SWAP16(px);
+        if (px != TRANSPARENT_COLOR) dst[x] = pp_pixel(px);
     }
 }
 
@@ -95,7 +90,7 @@ static void composite_layers_range(const CompositeParams& p) {
         uint16_t* drow = &p.dst[y * p.dst_stride];
 
         // --- Base layer: background + stream fused ---
-        // All writes to drow use SWAP16() for DMA byte order.
+        // All writes to drow use pp_pixel() for DMA byte order.
         if (p.bg && y < p.bg_h) {
             const uint16_t* bg_row = &p.bg[y * p.bg_w];
 
@@ -109,7 +104,7 @@ static void composite_layers_range(const CompositeParams& p) {
 
                 if (((uintptr_t)&st_row[x] & 2) && x < w) {
                     uint16_t s = st_row[x];
-                    drow[x] = SWAP16((s != TRANSPARENT_COLOR) ? s : bg_row[x]);
+                    drow[x] = pp_pixel((s != TRANSPARENT_COLOR) ? s : bg_row[x]);
                     x++;
                 }
 
@@ -117,25 +112,25 @@ static void composite_layers_range(const CompositeParams& p) {
                     uint32_t spair = *(const uint32_t*)&st_row[x];
                     if (spair == TRANS_PAIR) {
                         // Both stream pixels transparent — copy bg pair (swapped)
-                        drow[x]     = SWAP16(bg_row[x]);
-                        drow[x + 1] = SWAP16(bg_row[x + 1]);
+                        drow[x]     = pp_pixel(bg_row[x]);
+                        drow[x + 1] = pp_pixel(bg_row[x + 1]);
                     } else {
                         uint16_t s0 = (uint16_t)(spair);
                         uint16_t s1 = (uint16_t)(spair >> 16);
-                        drow[x]     = SWAP16((s0 != TRANSPARENT_COLOR) ? s0 : bg_row[x]);
-                        drow[x + 1] = SWAP16((s1 != TRANSPARENT_COLOR) ? s1 : bg_row[x + 1]);
+                        drow[x]     = pp_pixel((s0 != TRANSPARENT_COLOR) ? s0 : bg_row[x]);
+                        drow[x + 1] = pp_pixel((s1 != TRANSPARENT_COLOR) ? s1 : bg_row[x + 1]);
                     }
                 }
 
                 if (x < w) {
                     uint16_t s = st_row[x];
-                    drow[x] = SWAP16((s != TRANSPARENT_COLOR) ? s : bg_row[x]);
+                    drow[x] = pp_pixel((s != TRANSPARENT_COLOR) ? s : bg_row[x]);
                 }
             } else {
                 // No stream — copy bg row with byte swap
                 int cw = (p.bg_w < FRAME_WIDTH) ? p.bg_w : FRAME_WIDTH;
                 for (int x = 0; x < cw; x++) {
-                    drow[x] = SWAP16(bg_row[x]);
+                    drow[x] = pp_pixel(bg_row[x]);
                 }
             }
         } else {
@@ -143,7 +138,7 @@ static void composite_layers_range(const CompositeParams& p) {
                 const uint16_t* st_row = &p.stream[y * FRAME_WIDTH];
                 for (int x = 0; x < FRAME_WIDTH; x++) {
                     uint16_t s = st_row[x];
-                    drow[x] = (s != TRANSPARENT_COLOR) ? SWAP16(s) : 0;
+                    drow[x] = (s != TRANSPARENT_COLOR) ? pp_pixel(s) : 0;
                 }
             } else {
                 memset(drow, 0, FRAME_WIDTH * 2);

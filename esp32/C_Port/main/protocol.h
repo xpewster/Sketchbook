@@ -16,6 +16,7 @@ namespace proto {
     constexpr uint8_t MSG_RESET       = 0x04;
     constexpr uint8_t MSG_SET_MODE    = 0x05;
     constexpr uint8_t MSG_RECONNECT   = 0x06;
+    constexpr uint8_t MSG_SET_BRIGHTNESS = 0x07;
 
     constexpr uint8_t MODE_STREAMING = 0x00;
     constexpr uint8_t MODE_FLASH     = 0x01;

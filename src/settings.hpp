@@ -46,6 +46,7 @@ public:
         bool autoConnect = false;
         bool autoMemFlash = false;
         bool resetAfterFlash = true;
+        uint8_t brightness = 255; // 0-255
     };
 
     struct TrainConfig {
@@ -89,6 +90,7 @@ public:
                 preferences.startMinimized = (*prefTable)["start_minimized"].value_or(false);
                 preferences.autoMemFlash = (*prefTable)["auto_mem_flash"].value_or(false);
                 preferences.resetAfterFlash = (*prefTable)["reset_after_flash"].value_or(true);
+                preferences.brightness = (*prefTable)["brightness"].value_or(255);
             }
             LOG_INFO << "Loaded preferences: selectedSkin=" << preferences.selectedSkin 
                      << ", rotate180=" << preferences.rotate180
@@ -101,6 +103,7 @@ public:
                      << ", startMinimized=" << preferences.startMinimized
                      << ", autoMemFlash=" << preferences.autoMemFlash
                      << ", resetAfterFlash=" << preferences.resetAfterFlash
+                     << ", brightness=" << static_cast<int>(preferences.brightness)
                      << "\n";
             
             // Parse weather settings
@@ -203,7 +206,8 @@ public:
                 {"close_to_tray", preferences.closeToTray},
                 {"auto_connect", preferences.autoConnect},
                 {"auto_mem_flash", preferences.autoMemFlash},
-                {"reset_after_flash", preferences.resetAfterFlash}
+                {"reset_after_flash", preferences.resetAfterFlash},
+                {"brightness", preferences.brightness}
             });
 
             config.insert_or_assign("train", toml::table{
@@ -260,7 +264,8 @@ private:
             {"show_dirty_rects", true},
             {"start_minimized", false},
             {"close_to_tray", true},
-            {"auto_connect", true}
+            {"auto_connect", true},
+            {"brightness", 255}
         });
 
         config.insert_or_assign("train", toml::table{

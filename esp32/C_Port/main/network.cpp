@@ -16,9 +16,11 @@
 #include <cstring>
 #include <cerrno>
 
+#include "postprocess.h"
 #include "flash.h"
 #include "storage.h"
 #include "nvsm.h"
+
 
 static const char* TAG = "network";
 
@@ -103,7 +105,7 @@ static void idle_render_frame(uint16_t* dma_visible) {
         const uint16_t* srow = &src[y * sw];
         uint16_t* drow = &dma_visible[y * DISP_STRIDE];
         for (int x = 0; x < cw; x++) {
-            drow[x] = SWAP16(srow[x]);
+            drow[x] = pp_pixel(srow[x]);
         }
     }
     display_flush_cache();
@@ -346,7 +348,7 @@ static void blit_to_display(const uint16_t* src, uint16_t* dma_visible) {
         const uint16_t* srow = &src[y * FRAME_WIDTH];
         uint16_t* drow = &dma_visible[y * DISP_STRIDE];
         for (int x = 0; x < FRAME_WIDTH; x++) {
-            drow[x] = SWAP16(srow[x]);
+            drow[x] = pp_pixel(srow[x]);
         }
     }
     display_flush_cache();
@@ -659,6 +661,22 @@ RecvResult recv_frame(int sock, uint16_t* framebuf, uint8_t& current_mode) {
         ESP_LOGW(TAG, "Reconnect requested");
         send_ack(sock);
         return RecvResult::RECONNECT_REQUESTED;
+    }
+
+    case proto::MSG_SET_BRIGHTNESS: {
+        uint8_t brightness;
+        if (!recv_exact(sock, &brightness, 1)) {
+            ESP_LOGE(TAG, "Failed to receive brightness");
+            return RecvResult::ERROR;
+        }
+        ESP_LOGI(TAG, "Brightness set to %d", brightness);
+        pp_set_brightness(brightness);
+        // Force full recomposite — existing DMA buffer has old brightness
+        if (s_flash_mgr.is_loaded()) {
+            s_flash_mgr.mark_all_dirty();
+        }
+        send_ack(sock);
+        return RecvResult::NO_CHANGE;
     }
 
     default:

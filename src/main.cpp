@@ -30,6 +30,7 @@
 #include "ui/dropdown.cpp"
 #include "ui/checkbox.cpp"
 #include "ui/info.cpp"
+#include "ui/slider.cpp"
 #include "skins/skin.h"
 #include "skins/debug_skin.cpp"
 #include "skins/anime_skin.cpp"
@@ -245,6 +246,18 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
     sf::Text colorModeLabel(font, "ColorMode", 14);
     colorModeLabel.setPosition({620, 88});
     colorModeLabel.setFillColor(sf::Color::Black);
+
+    sf::Text displaySettingsLabel(font, "Display", 14);
+    displaySettingsLabel.setPosition({502, 22});
+    displaySettingsLabel.setFillColor(sf::Color::Black);
+    InfoIcon displaySettingsInfo(551, 22, 15, "resources/Settings.png", "Display settings", font);
+    displaySettingsInfo.setExtraHeight(70);
+    displaySettingsInfo.enableHoverOverBox(true);
+    Checkbox rotate180CB(466, 79, 12, "Rotate 180°", font, 4, -2, settings.preferences.rotate180);
+    Slider brightnessSlider(464, 100, 120, 0, 255, static_cast<float>(settings.preferences.brightness), font);
+    sf::Text brightnessLabel(font, "Brightness", 14);
+    brightnessLabel.setPosition({590, 99});
+    brightnessLabel.setFillColor(sf::Color::Black);
 
     Checkbox realtimeCB((float)(windowWidth - 280), (float)(windowHeight - 22), 12, "Real-time preview", font, 4, -2, settings.preferences.frameLockRealTimePreview);
     realtimeCB.setLabelColor(sf::Color::White);
@@ -570,6 +583,16 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
                     if (newColor != settings.network.colorMode) {
                         sender.setColorMode(newColor);
                         settings.network.colorMode = newColor;
+                    }
+                }
+                displaySettingsInfo.handleEvent(*event, mousePos, *window);
+                if (displaySettingsInfo.isHovered()) {
+                    rotate180CB.handleEvent(*event, mousePos, *window);
+                    settings.preferences.rotate180 = rotate180CB.isChecked();
+                    brightnessSlider.handleEvent(*event, mousePos, *window);
+                    if (brightnessSlider.getValue() != static_cast<float>(settings.preferences.brightness) && !brightnessSlider.isDragging()) {
+                        settings.preferences.brightness = static_cast<int>(brightnessSlider.getValue());
+                        sender.sendSetBrightness(settings.preferences.brightness);
                     }
                 }
 
@@ -1073,6 +1096,13 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
                 rleCompressionCB.draw(*window);
                 colorModeDropdown.draw(*window);
                 window->draw(colorModeLabel);
+            }
+            window->draw(displaySettingsLabel);
+            displaySettingsInfo.draw(*window);
+            if (displaySettingsInfo.isHovered()) {
+                rotate180CB.draw(*window);
+                brightnessSlider.draw(*window);
+                window->draw(brightnessLabel);
             }
 
             settingsInfo.draw(*window);

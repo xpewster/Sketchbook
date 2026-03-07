@@ -25,7 +25,7 @@ public:
     Checkbox(float x, float y, float size, const std::string& label, 
              sf::Font& f, float label_offset_x, float label_offset_y, bool defaultChecked = false)
         : checked(defaultChecked), font(f), position(x, y), 
-          boxSize(size), labelText(f, label, 14) {
+          boxSize(size), labelText(f, sf::String::fromUtf8(label.begin(), label.end()), 14) {
         
         box.setPosition(sf::Vector2f(x, y));
         box.setSize(sf::Vector2f(size, size));
