@@ -6,17 +6,13 @@
 // Post-Processing Pipeline
 // ============================================================
 // Generic per-pixel post-processing applied when writing to the DMA
-// framebuffer. Also performs SWAP16() for endian conversion.
-
-// Currently supports:
-//   - Brightness (0-255, applied via precomputed channel LUTs)
+// framebuffer. All DMA writes go through pp_pixel().
 //
-// To add more effects later (gamma, color temperature, etc.),
-// extend pp_set_* and fold them into the LUTs or pp_pixel.
+// Currently supports:
+//   - Brightness (0-255). Uses per-channel LUTs (128 bytes
+//     total in L1 cache). Combo of linear LUT + photoshop-like curve to maintain saturated colors at low brightness.
 
-// --- LUTs (128 bytes total, fits in L1 cache) ---
-// Precomputed when brightness changes. Each entry maps an input
-// channel value to its brightness-adjusted output.
+// --- Channel LUTs (128 bytes total, L1 cache resident) ---
 extern uint8_t pp_r_lut[32];   // 5-bit red   (0-31 → 0-31)
 extern uint8_t pp_g_lut[64];   // 6-bit green (0-63 → 0-63)
 extern uint8_t pp_b_lut[32];   // 5-bit blue  (0-31 → 0-31)
@@ -25,7 +21,10 @@ extern uint8_t pp_brightness;  // Current brightness (0-255, 255 = full)
 /// Set brightness (0=black, 255=full). Recomputes LUTs.
 void pp_set_brightness(uint8_t brightness);
 
-/// Process one RGB565 pixel: apply brightness + byte-swap for DMA.
+/// Initialize post-processing (sets LUTs to identity).
+void pp_init();
+
+/// Process one RGB565 pixel: apply brightness + endianness byte-swap for DMA.
 /// This replaces SWAP16() everywhere we write to the DMA buffer.
 static inline __attribute__((always_inline))
 uint16_t pp_pixel(uint16_t px) {

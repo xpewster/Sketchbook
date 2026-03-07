@@ -2,6 +2,7 @@
 #include "network.h"
 #include "protocol.h"
 #include "storage.h"
+#include "postprocess.h"
 
 #include "nvs_flash.h"
 #include "esp_log.h"
@@ -65,15 +66,18 @@ extern "C" void app_main(void) {
     gfx.fillScreen(0);
     ESP_LOGI(TAG, "Display ready: %dx%d", gfx.width(), gfx.height());
 
-    // Step 4: Initialize network buffers
+    // Step 4: Initialize post-processing pipeline
+    pp_init();
+
+    // Step 5: Initialize network buffers
     network_init();
 
-    // Step 5: Pre-load flash assets while screen is still black.
+    // Step 6: Pre-load flash assets while screen is still black.
     // Heavy PSRAM I/O here causes LCD DMA glitching, but the screen is
     // blank so the user doesn't see it.
     preload_flash_assets();
 
-    // Step 6: Load and display idle GIF.
+    // Step 7: Load and display idle GIF.
     // Now that heavy PSRAM work is done, the idle GIF animates smoothly.
     // Animation task starts on Core 1 and runs through WiFi connect.
     {
@@ -84,7 +88,7 @@ extern "C" void app_main(void) {
         }
     }
 
-    // Step 7: Allocate recv/composite buffer in PSRAM
+    // Step 8: Allocate recv/composite buffer in PSRAM
     uint16_t* framebuf = (uint16_t*)heap_caps_calloc(
         FRAME_PIXELS, sizeof(uint16_t),
         MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
@@ -94,7 +98,7 @@ extern "C" void app_main(void) {
     }
     ESP_LOGI(TAG, "Recv buffer allocated (%d KB in PSRAM)", FRAME_BYTES / 1024);
 
-    // Step 8: Launch network task on Core 0
+    // Step 9: Launch network task on Core 0
     // wifi_init() will block for seconds — idle GIF animates on Core 1 meanwhile.
     xTaskCreatePinnedToCore(
         network_task,

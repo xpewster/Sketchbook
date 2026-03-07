@@ -1,26 +1,67 @@
 #include "postprocess.h"
+#include "esp_log.h"
+#include <cmath>
 
 static const char* TAG = "postprocess";
 
-// LUT storage — initialized to identity (brightness 255)
 uint8_t pp_r_lut[32];
 uint8_t pp_g_lut[64];
 uint8_t pp_b_lut[32];
 uint8_t pp_brightness = 255;
 
-// Called once at startup and whenever brightness changes
-static void recompute_luts() {
-    uint16_t b = pp_brightness;  // Wider type to avoid overflow in multiply
+static constexpr float GAMMA = 2.2f; // Display gamma
+static constexpr float INV_GAMMA = 1.0f / 2.2f;
+static constexpr float BOOST_K = 0.274f;
 
-    for (int i = 0; i < 32; i++) {
-        pp_r_lut[i] = (uint8_t)((i * b + 127) / 255);  // +127 for rounding
+// Brightness method 0: perceptually linear
+static void build_channel_lut_0(uint8_t* lut, int max_val, float brightness_linear) {
+    for (int i = 0; i <= max_val; i++) {
+        float linear = powf((float)i / max_val, GAMMA);
+        linear *= brightness_linear;
+        float out = powf(linear, INV_GAMMA) * max_val;
+        int val = (int)(out + 0.5f);
+        lut[i] = (uint8_t)(val > max_val ? max_val : val);
     }
-    for (int i = 0; i < 64; i++) {
-        pp_g_lut[i] = (uint8_t)((i * b + 127) / 255);
+}
+
+// Brightness method 1: photoshop like curve
+static void build_channel_lut_1(uint8_t* lut, int max_val, float a_base, float a_boost) {
+    for (int i = 0; i <= max_val; i++) {
+        float x = (float)i / max_val;
+        float x2 = x * x;
+        float x4 = x2 * x2;
+        float a_eff = a_base + a_boost * x4;
+
+        float y;
+        if (a_eff < 0.001f) {
+            y = 0.0f;  // Near-zero exponent → all black
+        } else {
+            y = 1.0f - powf(1.0f - x, a_eff);
+        }
+
+        int val = (int)(y * max_val + 0.5f);
+        // uint8_t out = (uint8_t)(val > max_val ? max_val : (val < 0 ? 0 : val));
+
+        // Weight with existing linear LUT to reduce harshness of curve
+        float m = 1.0f - a_base;
+        float m2 = m * m;
+        float m4 = m2 * m2;
+        float m8 = m4 * m4;
+        uint8_t out = (uint8_t)((val > max_val ? max_val : (val < 0 ? 0 : val)) * (1.0f - m8));
+        lut[i] = (lut[i] + out) / 2;
     }
-    for (int i = 0; i < 32; i++) {
-        pp_b_lut[i] = (uint8_t)((i * b + 127) / 255);
-    }
+}
+
+static void recompute_luts() {
+    float brightness_linear = pp_brightness / 255.0f;
+    float a_boost = (1.0f - brightness_linear) * BOOST_K;
+
+    build_channel_lut_0(pp_r_lut, 31, brightness_linear);
+    build_channel_lut_0(pp_g_lut, 63, brightness_linear);
+    build_channel_lut_0(pp_b_lut, 31, brightness_linear);
+    build_channel_lut_1(pp_r_lut, 31, brightness_linear, a_boost);
+    build_channel_lut_1(pp_g_lut, 63, brightness_linear, a_boost);
+    build_channel_lut_1(pp_b_lut, 31, brightness_linear, a_boost);
 }
 
 void pp_set_brightness(uint8_t brightness) {
@@ -29,9 +70,7 @@ void pp_set_brightness(uint8_t brightness) {
     recompute_luts();
 }
 
-// Ensure LUTs start as identity
-__attribute__((constructor))
-static void pp_init() {
+void pp_init() {
     pp_brightness = 255;
     recompute_luts();
 }
