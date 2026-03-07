@@ -15,6 +15,7 @@ idf_component_register(
         driver
         esp_lcd
         esp_timer
+        esp_phy
         LovyanGFX
         lwip
         fatfs

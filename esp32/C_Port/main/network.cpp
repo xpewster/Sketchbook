@@ -5,6 +5,7 @@
 #include "esp_event.h"
 #include "esp_log.h"
 #include "esp_netif.h"
+#include "esp_phy_init.h"
 #include "nvs_flash.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
@@ -871,9 +872,12 @@ void tcp_server_start(uint16_t* framebuf) {
                     }
                 }
             } else if (result == RecvResult::RESET_REQUESTED) {
+                ESP_LOGI(TAG, "Reset requested — restarting ESP32");
+                esp_phy_erase_cal_data_in_nvs(); // Reset PHY calibration data. Sometimes needed to fix WiFi throughput issues
                 esp_restart();
                 break;
             } else if (result == RecvResult::RECONNECT_REQUESTED) {
+                ESP_LOGI(TAG, "Reconnect requested — restarting connection");
                 close(client_sock);
                 reconnect_wifi();
                 break;
