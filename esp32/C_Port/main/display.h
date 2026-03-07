@@ -187,7 +187,6 @@ extern "C" int Cache_WriteBack_Addr(uint32_t addr, uint32_t size);
 // Our pixel data is little-endian (native ESP32), but the LCD_CAM parallel
 // interface shifts out bytes in memory order. LovyanGFX's pushImage handled
 // this via setSwapBytes(true); since we write directly, we swap on write.
-// __builtin_bswap16 compiles to a single instruction on Xtensa.
 static inline uint16_t SWAP16(uint16_t v) { return __builtin_bswap16(v); }
 
 // Pre-swapped transparent color for comparisons in the DMA buffer

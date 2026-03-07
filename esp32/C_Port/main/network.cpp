@@ -17,6 +17,7 @@
 
 #include "flash.h"
 #include "storage.h"
+#include "nvsm.h"
 
 static const char* TAG = "network";
 
@@ -28,6 +29,149 @@ FlashDataHeader g_last_flash_data = {};
 
 // Flash mode manager (created on mode switch)
 static FlashModeManager s_flash_mgr;
+
+// ============================================================
+// Idle/Loading GIF
+// ============================================================
+// The idle GIF animation needs to run independently of the network task
+// because wifi_init() blocks for seconds. A separate task on Core 1 keeps the animation smooth.
+//
+// Lifecycle:
+//   idle_gif_load_and_show()  — called from main.cpp, loads GIF, renders
+//                                first frame, starts animation task
+//   idle_gif_stop()           — stops animation (client connected, or
+//                                switching to flash/streaming display)
+//   idle_gif_start()          — resumes animation (disconnect → idle)
+//   idle_gif_freeze(true)     — suspends task during heavy PSRAM I/O
+//                                (flash asset loading) to reduce bus contention
+//   idle_gif_freeze(false)    — resumes task after PSRAM-heavy work
+
+static Sprite       s_idle_gif;
+static AnimatedGIF  s_idle_decoder;     // Own decoder — internal SRAM
+static bool         s_idle_loaded = false;
+static uint16_t*    s_idle_dma_visible = nullptr;
+static TaskHandle_t s_idle_task = nullptr;
+static bool         s_idle_running = false;  // True when task should animate
+
+/// Load the appropriate loading GIF based on saved mode.
+static void load_idle_gif(uint8_t saved_mode) {
+    if (!storage_available()) {
+        ESP_LOGW(TAG, "Filesystem not available, cannot load idle GIF");
+        return;
+    }
+
+    const char* primary = nullptr;
+    const char* fallback = FLASH_DEFAULT_LOADING_GIF;
+
+    if (saved_mode == proto::MODE_FLASH) {
+        primary = FLASH_ASSETS_DIR "/loading.gif";
+    } else {
+        primary = FLASH_DEFAULT_LOADING_GIF;
+    }
+
+    if (load_sprite(s_idle_gif, primary, 0, 0)) {
+        ESP_LOGI(TAG, "Loaded idle GIF: %s (%dx%d)", primary, s_idle_gif.w, s_idle_gif.h);
+    } else if (primary != fallback && load_sprite(s_idle_gif, fallback, 0, 0)) {
+        ESP_LOGI(TAG, "Loaded fallback idle GIF: %s (%dx%d)", fallback, s_idle_gif.w, s_idle_gif.h);
+    } else {
+        ESP_LOGW(TAG, "No idle GIF available");
+        return;
+    }
+
+    // Decode first frame
+    if (s_idle_gif.is_gif()) {
+        s_idle_gif.gif.bind(s_idle_decoder);
+        s_idle_gif.gif.next_frame(s_idle_decoder);
+        s_idle_gif.pixels = s_idle_gif.gif.pixels();
+    }
+
+    s_idle_loaded = true;
+}
+
+/// Render the current idle GIF frame to the DMA framebuffer with byte-swap.
+static void idle_render_frame(uint16_t* dma_visible) {
+    if (!s_idle_loaded || !s_idle_gif.pixels || !dma_visible) return;
+
+    const uint16_t* src = s_idle_gif.pixels;
+    int sw = s_idle_gif.w;
+    int sh = s_idle_gif.h;
+    int cw = (sw < FRAME_WIDTH)  ? sw : FRAME_WIDTH;
+    int ch = (sh < FRAME_HEIGHT) ? sh : FRAME_HEIGHT;
+
+    for (int y = 0; y < ch; y++) {
+        const uint16_t* srow = &src[y * sw];
+        uint16_t* drow = &dma_visible[y * DISP_STRIDE];
+        for (int x = 0; x < cw; x++) {
+            drow[x] = SWAP16(srow[x]);
+        }
+    }
+    display_flush_cache();
+}
+
+/// Core 1 task: animate idle GIF continuously while s_idle_running is true.
+static void idle_gif_task(void*) {
+    while (true) {
+        if (s_idle_running && s_idle_loaded && s_idle_gif.is_gif() && s_idle_dma_visible) {
+            s_idle_gif.gif.bind(s_idle_decoder);
+            int delay_ms = s_idle_gif.gif.next_frame(s_idle_decoder);
+            s_idle_gif.pixels = s_idle_gif.gif.pixels();
+
+            idle_render_frame(s_idle_dma_visible);
+
+            vTaskDelay(pdMS_TO_TICKS((delay_ms > 3) ? delay_ms : 3));
+        } else {
+            // Not running — sleep and check again
+            vTaskDelay(pdMS_TO_TICKS(50));
+        }
+    }
+}
+
+// --- Public API ---
+
+void idle_gif_load_and_show(uint16_t* dma_visible) {
+    s_idle_dma_visible = dma_visible;
+
+    uint8_t saved_mode = load_saved_mode();
+    ESP_LOGI(TAG, "Saved mode: %s", saved_mode == proto::MODE_FLASH ? "flash" : "streaming");
+    load_idle_gif(saved_mode);
+
+    // Render first frame immediately (before task starts)
+    idle_render_frame(dma_visible);
+
+    // Start animation task on Core 1
+    s_idle_running = true;
+    if (!s_idle_task) {
+        xTaskCreatePinnedToCore(
+            idle_gif_task,
+            "idle_gif",
+            4096,
+            nullptr,
+            3,              // Lower priority than network (5) and composite helper (5)
+            &s_idle_task,
+            1               // Core 1
+        );
+        ESP_LOGI(TAG, "Idle GIF task started on Core 1");
+    }
+}
+
+void idle_gif_start() {
+    s_idle_running = true;
+}
+
+void idle_gif_stop() {
+    s_idle_running = false;
+}
+
+void idle_gif_freeze(bool frozen) {
+    if (!s_idle_task) return;
+    if (frozen) {
+        vTaskSuspend(s_idle_task);
+        ESP_LOGD(TAG, "Idle GIF task suspended");
+    } else {
+        vTaskResume(s_idle_task);
+        ESP_LOGD(TAG, "Idle GIF task resumed");
+    }
+}
 
 // ============================================================
 // WiFi
@@ -146,14 +290,14 @@ static int recv_msg_type(int sock, uint8_t* msg_type) {
     return -1;  // Error
 }
 
-// ============================================================
-// Protocol: recv_frame
-// ============================================================
-
 static void send_ack(int sock) {
     uint8_t ack = 0x06;
     send(sock, &ack, 1, 0);
 }
+
+// ============================================================
+// Init / Cleanup
+// ============================================================
 
 void network_init() {
     // Allocate RLE buffer for dirty rects (worst case: no compression)
@@ -166,6 +310,21 @@ void network_init() {
     }
     init_color_luts();
     s_flash_mgr = FlashModeManager();
+}
+
+bool preload_flash_assets() {
+    if (s_flash_mgr.is_loaded()) return true;
+    if (!storage_available()) return false;
+
+    ESP_LOGI(TAG, "Pre-loading flash assets (PSRAM free: %lu KB)...",
+             heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024);
+
+    bool ok = s_flash_mgr.init(FLASH_CONFIG_FILE);
+
+    ESP_LOGI(TAG, "Flash preload %s (PSRAM free: %lu KB)",
+             ok ? "OK" : "FAILED",
+             heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024);
+    return ok;
 }
 
 void network_cleanup() {
@@ -560,18 +719,60 @@ void tcp_server_start(uint16_t* framebuf) {
                  dma_fb, dma_visible, DISP_STRIDE);
     }
 
+    // Idle GIF was already loaded and rendered by main.cpp before the network
+    // task launched. The DMA buffer still has that frame showing.
+
+    // Disconnect grace periods: keep showing last content before switching to idle GIF.
+    // Flash mode gets a longer period since animations keep running independently.
+    // Streaming mode shows a frozen last frame briefly before the idle GIF.
+    constexpr int64_t FLASH_DISCONNECT_GRACE_US    = 30 * 1000000LL;
+    constexpr int64_t STREAMING_DISCONNECT_GRACE_US = 5 * 1000000LL;
+    int64_t disconnect_time = 0;
+    bool showing_idle = true;
+    uint8_t disconnected_mode = proto::MODE_STREAMING;  // Mode at time of disconnect
+
     while (true) {
+        // --- Accept loop: animate idle GIF while waiting for client ---
         struct sockaddr_in client_addr;
         socklen_t client_len = sizeof(client_addr);
-        int client_sock = accept(server_sock, (struct sockaddr*)&client_addr, &client_len);
-        if (client_sock < 0) {
-            vTaskDelay(pdMS_TO_TICKS(1000));
-            continue;
+        int client_sock = -1;
+
+        while (client_sock < 0) {
+            client_sock = accept(server_sock, (struct sockaddr*)&client_addr, &client_len);
+            if (client_sock >= 0) break;
+
+            int64_t now = esp_timer_get_time();
+
+            if (!showing_idle && disconnect_time > 0) {
+                int64_t grace = (disconnected_mode == proto::MODE_FLASH)
+                    ? FLASH_DISCONNECT_GRACE_US : STREAMING_DISCONNECT_GRACE_US;
+                if ((now - disconnect_time) >= grace) {
+                    ESP_LOGI(TAG, "Disconnect grace period expired, showing idle GIF");
+                    showing_idle = true;
+                    if (dma_fb) clear_display(dma_fb);
+                    idle_gif_start();  // Resume Core 1 animation task
+                }
+            }
+
+            if (!showing_idle && disconnected_mode == proto::MODE_FLASH
+                       && s_flash_mgr.is_loaded() && dma_visible) {
+                // During flash grace period: keep animating on this core
+                s_flash_mgr.tick_and_composite(dma_visible, DISP_STRIDE);
+                display_flush_cache();
+                vTaskDelay(pdMS_TO_TICKS(5));
+            } else {
+                // Idle GIF animating on Core 1, or streaming grace (frozen frame).
+                // Either way, nothing for this core to do.
+                vTaskDelay(pdMS_TO_TICKS(50));
+            }
         }
         setsockopt(client_sock, SOL_SOCKET, SO_RCVBUF, &bufsize, sizeof(bufsize));
 
         ESP_LOGI(TAG, "Client connected from " IPSTR,
                  IP2STR((esp_ip4_addr_t*)&client_addr.sin_addr));
+        showing_idle = false;
+        disconnect_time = 0;
+        idle_gif_stop();  // Stop Core 1 animation — we own the DMA buffer now
 
         // TCP_NODELAY: disable Nagle's algorithm.
         opt = 1;
@@ -629,7 +830,7 @@ void tcp_server_start(uint16_t* framebuf) {
                 blit_us_total += (t3 - t2);
                 frame_count++;
             } else if (result == RecvResult::NO_CHANGE) {
-                int64_t t2, t3;
+                int64_t t2 = t1, t3 = t1;
                 if (current_mode == proto::MODE_FLASH && s_flash_mgr.is_loaded()) {
                     // Still animate and composite even with no new data
                     if (dma_visible) {
@@ -661,10 +862,11 @@ void tcp_server_start(uint16_t* framebuf) {
                 // In streaming mode, timeout means PC stopped sending — just wait
             } else if (result == RecvResult::MODE_CHANGED) {
                 ESP_LOGI(TAG, "Switching to mode %d", current_mode);
+                save_mode(current_mode);
 
                 if (current_mode == proto::MODE_FLASH) {
                     if (!s_flash_mgr.is_loaded()) {
-                        ESP_LOGI(TAG, "Flash mode: waiting for data to load...");
+                        ESP_LOGI(TAG, "Flash mode: loading assets...");
                         s_flash_mgr.init(FLASH_CONFIG_FILE);
                     }
                 }
@@ -705,11 +907,20 @@ void tcp_server_start(uint16_t* framebuf) {
         close(client_sock);
         ESP_LOGI(TAG, "Client disconnected");
 
-        // Show black screen when idle
-        if (dma_fb) {
-            clear_display(dma_fb);
+        // Start disconnect grace period.
+        // Flash mode: keep animating during the grace period.
+        // Streaming mode: freeze last frame during the grace period.
+        // After timeout, switch to idle GIF.
+        disconnect_time = esp_timer_get_time();
+        disconnected_mode = current_mode;
+        showing_idle = false;
+
+        if (current_mode == proto::MODE_FLASH && s_flash_mgr.is_loaded()) {
+            ESP_LOGI(TAG, "Flash mode disconnect — grace period %.0fs",
+                     FLASH_DISCONNECT_GRACE_US / 1000000.0f);
         } else {
-            gfx.fillScreen(0);
+            ESP_LOGI(TAG, "Streaming mode disconnect — grace period %.0fs",
+                     STREAMING_DISCONNECT_GRACE_US / 1000000.0f);
         }
     }
 }

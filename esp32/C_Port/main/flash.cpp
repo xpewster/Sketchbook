@@ -18,7 +18,6 @@ static const char* TAG = "flash";
 // Our pixel data is little-endian (native ESP32), but the LCD_CAM parallel
 // interface shifts out bytes in memory order. LovyanGFX's pushImage handled
 // this via setSwapBytes(true); since we write directly, we swap on write.
-// __builtin_bswap16 compiles to a single instruction on Xtensa.
 static inline uint16_t SWAP16(uint16_t v) { return __builtin_bswap16(v); }
 
 // ============================================================
@@ -47,7 +46,7 @@ struct CompositeParams {
 };
 
 // ============================================================
-// Optimized Transparent Row Composite
+// Transparent Row Composite
 // ============================================================
 
 static void composite_row_transparent(uint16_t* __restrict dst,
@@ -386,29 +385,6 @@ bool FlashModeManager::init(const char* config_path) {
              heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024);
     ESP_LOGI(TAG, "Free internal RAM: %lu KB",
              heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024);
-    return true;
-}
-
-// ============================================================
-// Asset Loading
-// ============================================================
-
-bool FlashModeManager::load_sprite(Sprite& s, const char* path, int base_x, int base_y) {
-    s.base_x = base_x;
-    s.base_y = base_y;
-
-    if (strstr(path, ".gif")) {
-        if (!s.gif.load(path)) return false;
-        s.w = s.gif.width();
-        s.h = s.gif.height();
-        s.pixels = s.gif.pixels();
-        return true;
-    }
-
-    if (!s.image.load(path)) return false;
-    s.w = s.image.width;
-    s.h = s.image.height;
-    s.pixels = s.image.pixels;
     return true;
 }
 

@@ -8,7 +8,9 @@
 // Mount point for the FAT partition (used in file paths)
 #define FLASH_MOUNT_POINT "/flash"
 #define FLASH_ASSETS_DIR  FLASH_MOUNT_POINT "/flash_assets"
+#define FLASH_DEFAULT_ASSETS_DIR FLASH_MOUNT_POINT "/default"
 #define FLASH_CONFIG_FILE FLASH_ASSETS_DIR "/config.txt"
+#define FLASH_DEFAULT_LOADING_GIF FLASH_DEFAULT_ASSETS_DIR "/loading.gif"
 
 // Initialize FAT partition + USB MSC.
 // After this call, files are accessible at FLASH_MOUNT_POINT.

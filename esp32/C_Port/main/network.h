@@ -15,15 +15,33 @@ enum class RecvResult {
     ERROR,
 };
 
-// Initialize WiFi station mode (blocks until connected)
+// Initialize WiFi station mode
 void wifi_init();
 
-// Disconnect and reconnect WiFi (used on MSG_RESET instead of full reboot)
+// Disconnect and reconnect WiFi
 void reconnect_wifi();
 
 // Initialize network buffers
 void network_init();
 void network_cleanup();
+
+// Pre-load flash mode assets based on saved NVS mode.
+// Returns true if flash assets loaded successfully.
+bool preload_flash_assets();
+
+// --- Idle GIF ---
+
+// Load the idle GIF based on saved NVS mode, render first frame, start animation task.
+// dma_visible: pointer into DMA framebuffer at the visible area offset.
+void idle_gif_load_and_show(uint16_t* dma_visible);
+
+// Start/stop idle GIF animation
+void idle_gif_start();
+void idle_gif_stop();
+
+// Suspend/resume the idle task entirely (reduces PSRAM bus contention
+// during heavy operations like flash asset loading)
+void idle_gif_freeze(bool frozen);
 
 // Start TCP server on TCP_PORT. Blocks, accepts one client at a time.
 // framebuf: pointer to the recv/composite buffer.

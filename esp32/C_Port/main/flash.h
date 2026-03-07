@@ -4,6 +4,7 @@
 #include "config.h"
 #include "gif.h"
 #include "rgb565.h"
+#include "sprite.h"
 #include "AnimatedGIF.h"
 #include <cstdint>
 #include <cstring>
@@ -20,16 +21,6 @@ constexpr int NUM_WEATHER_ICONS = 7;
 // Dirty row bitmask size (960 rows / 8 = 120 bytes)
 constexpr int DIRTY_BITMASK_BYTES = (FRAME_HEIGHT + 7) / 8;
 
-struct Sprite {
-    const uint16_t* pixels = nullptr;  // Points into gif.pixels() or R565Image
-    GifSprite       gif;               // Inline — file data + RGB565 in PSRAM, struct itself is small
-    R565Image       image;             // Owns memory if static
-    uint16_t        w = 0, h = 0;
-    int16_t         base_x = 0, base_y = 0;
-
-    bool loaded() const { return pixels != nullptr; }
-    bool is_gif() const { return gif.loaded(); }
-};
 
 class FlashModeManager {
 public:
@@ -111,7 +102,6 @@ private:
     void mark_rows_dirty(int y, int h);
 
     // Helpers
-    bool load_sprite(Sprite& s, const char* path, int base_x, int base_y);
     Sprite* active_char();
     Sprite* active_weather();
 
