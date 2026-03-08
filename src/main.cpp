@@ -824,7 +824,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
                     connectBtn.setLabel("Disconnect");
                     connectBtn.setColor(sf::Color(255, 100, 100), sf::Color(255, 150, 150));
                     statusIndicator.setFillColor(sf::Color::Green);
-                    sender.start(&connection);
+                    InitialConfig initialConfig;
+                    initialConfig.brightness = settings.preferences.brightness;
+                    sender.start(&connection, initialConfig);
                     frameLock.reset();  // Reset frame lock timing on new connection
                     pendingModeSync = true; // We want to sync mode selection after connecting
                 } else {
@@ -1084,21 +1086,21 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
             frameLockCB.draw(*window);
             flashModeCB.draw(*window);
             flashModeInfo.draw(*window);
-            frameLockInfo.draw(*window);
             if (flashModeInfo.isHovered()) {
                 flashDriveInput.draw(*window);
                 flashBtn.draw(*window);
                 autoMemFlashCB.draw(*window);
             }
             window->draw(compressionLabel);
+            window->draw(displaySettingsLabel);
+            displaySettingsInfo.draw(*window);
             compressionInfo.draw(*window);
+            frameLockInfo.draw(*window);
             if (compressionInfo.isHovered()) {
                 rleCompressionCB.draw(*window);
                 colorModeDropdown.draw(*window);
                 window->draw(colorModeLabel);
             }
-            window->draw(displaySettingsLabel);
-            displaySettingsInfo.draw(*window);
             if (displaySettingsInfo.isHovered()) {
                 rotate180CB.draw(*window);
                 brightnessSlider.draw(*window);

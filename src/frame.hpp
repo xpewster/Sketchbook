@@ -25,6 +25,10 @@ namespace protocol {
 
 constexpr int TIMEOUT_ACK = 20000; // ms
 
+struct InitialConfig {
+    uint8_t brightness = 255;
+};
+
 // Threaded frame sender with frame lock support
 class FrameSender {
 public:
@@ -36,7 +40,7 @@ public:
         stop();
     }
 
-    void start(TcpConnection* conn) {
+    void start(TcpConnection* conn, const InitialConfig& initialConfig) {
         connection_ = conn;
         running_ = true;
         sendError_ = false;
@@ -50,7 +54,7 @@ public:
         totalDirtyRatioSum_ = 0.0;
         sessionStart_ = std::chrono::steady_clock::now();
         dirtyTracker_.invalidate();  // Reset tracker on new connection
-        sendThread_ = std::thread(&FrameSender::sendLoop, this);
+        sendThread_ = std::thread(&FrameSender::sendLoop, this, initialConfig);
     }
     
     void stop() {
@@ -230,7 +234,24 @@ public:
     std::string getErrorMessage() const { return sendErrorMsg_; }
     
 private:
-    void sendLoop() {
+    void sendInitialCommands(const InitialConfig& initialConfig) {
+        // Send initial commands brightness
+        bool success = false;
+        if (connection_) {
+            success = sendSetBrightness(initialConfig.brightness);
+            if (success) {
+                LOG_INFO << "Initial brightness command sent successfully\n";
+            } else {
+                LOG_ERROR << "Failed to send initial brightness command\n";
+                sendError_ = true;
+                sendErrorMsg_ = "Failed to send initial brightness command";
+            }
+        }
+    }
+
+    void sendLoop(const InitialConfig& initialConfig) {
+        sendInitialCommands(initialConfig);
+
         while (true) {
             std::unique_lock<std::mutex> lock(mutex_);
             cv_.wait(lock, [this] { return frameReady_ || pendingModeSelection_ || !running_; });
