@@ -5,6 +5,7 @@
 #include <filesystem>
 #include <iostream>
 #include <fstream>
+#include <sstream>
 #include "log.hpp"
 
 class Settings {
@@ -47,6 +48,7 @@ public:
         bool autoMemFlash = false;
         bool resetAfterFlash = true;
         uint8_t brightness = 255; // 0-255
+        std::string brightnessScheduleStr = ""; // e.g. "19:30={200},21:30={160},06:00={255}"
     };
 
     struct TrainConfig {
@@ -91,6 +93,7 @@ public:
                 preferences.autoMemFlash = (*prefTable)["auto_mem_flash"].value_or(false);
                 preferences.resetAfterFlash = (*prefTable)["reset_after_flash"].value_or(true);
                 preferences.brightness = (*prefTable)["brightness"].value_or(255);
+                preferences.brightnessScheduleStr = (*prefTable)["brightness_schedule"].value_or("");
             }
             LOG_INFO << "Loaded preferences: selectedSkin=" << preferences.selectedSkin 
                      << ", rotate180=" << preferences.rotate180
@@ -104,6 +107,7 @@ public:
                      << ", autoMemFlash=" << preferences.autoMemFlash
                      << ", resetAfterFlash=" << preferences.resetAfterFlash
                      << ", brightness=" << static_cast<int>(preferences.brightness)
+                     << ", brightnessSchedule=" << preferences.brightnessScheduleStr
                      << "\n";
             
             // Parse weather settings
@@ -194,6 +198,14 @@ public:
                 {"rle_enabled", network.rleEnabled},
                 {"color_mode", static_cast<int>(network.colorMode)}
             });
+            
+            // Support updating brightness schedule during program execution by retrieving the latest value before save.
+            // Otherwise, the schedule is overwritten on save with the old value. This read value is safe to trust since we don't modify it within the program yet
+            std::filesystem::path settingsPath = getExeDirectory() / "settings.toml";
+            auto latestConfig = toml::parse_file(settingsPath.string());
+            if (auto prefTable = latestConfig["preferences"].as_table()) {
+                preferences.brightnessScheduleStr = (*prefTable)["brightness_schedule"].value_or("");
+            }
 
             config.insert_or_assign("preferences", toml::table{
                 {"selected_skin", preferences.selectedSkin},
@@ -207,7 +219,8 @@ public:
                 {"auto_connect", preferences.autoConnect},
                 {"auto_mem_flash", preferences.autoMemFlash},
                 {"reset_after_flash", preferences.resetAfterFlash},
-                {"brightness", preferences.brightness}
+                {"brightness", preferences.brightness},
+                {"brightness_schedule", preferences.brightnessScheduleStr}
             });
 
             config.insert_or_assign("train", toml::table{
@@ -217,8 +230,13 @@ public:
                 {"api_base", train.apiBase}
             });
             
+            std::ostringstream oss;
+            oss << config;
+            std::string tomlStr = oss.str();
+            insertInlineComment(tomlStr, "brightness_schedule", "Format: 'HH:MM={brightness},HH:MM={brightness},...'");
+
             std::ofstream file(settingsPath);
-            file << config;
+            file << tomlStr;
             
             LOG_INFO << "Settings saved to: " << settingsPath << "\n";
             return true;
@@ -230,6 +248,26 @@ public:
     }
     
 private:
+    // Inserts a TOML comment before the first occurrence of a key in the serialized output.
+    // tomlplusplus doesn't support programmatic comments on nodes, so we post-process the string.
+    static void insertInlineComment(std::string& tomlStr, const std::string& key, const std::string& comment) {
+        auto pos = tomlStr.find(key);
+        if (pos != std::string::npos) {
+            auto eol = tomlStr.find('\n', pos);
+            if (eol == std::string::npos) eol = tomlStr.size();
+            tomlStr.insert(eol, " # " + comment);
+        }
+    }
+
+    // Inserts a TOML comment before the first occurrence of a key in the serialized output.
+    // tomlplusplus doesn't support programmatic comments on nodes, so we post-process the string.
+    static void insertCommentBeforeKey(std::string& tomlStr, const std::string& key, const std::string& comment) {
+        auto pos = tomlStr.find(key);
+        if (pos != std::string::npos) {
+            tomlStr.insert(pos, "# " + comment + "\n");
+        }
+    }
+
     std::filesystem::path getExeDirectory() {
         wchar_t exePath[MAX_PATH];
         GetModuleFileNameW(NULL, exePath, MAX_PATH);
@@ -265,7 +303,8 @@ private:
             {"start_minimized", false},
             {"close_to_tray", true},
             {"auto_connect", true},
-            {"brightness", 255}
+            {"brightness", 255},
+            {"brightness_schedule", "19:30={200},21:30={160},06:00={255}"}
         });
 
         config.insert_or_assign("train", toml::table{
@@ -275,8 +314,13 @@ private:
             {"api_base", "https://api.pugetsound.onebusaway.org"}
         });
         
+        std::ostringstream oss;
+        oss << config;
+        std::string tomlStr = oss.str();
+        insertInlineComment(tomlStr, "brightness_schedule", "Format: 'HH:MM={brightness},HH:MM={brightness},...'");
+
         std::ofstream file(path);
         file << "# System Monitor Settings\n\n";
-        file << config;
+        file << tomlStr;
     }
 };

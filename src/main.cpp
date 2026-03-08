@@ -41,6 +41,7 @@
 #include "train.hpp"
 #include "frame.hpp"
 #include "framelock.hpp"
+#include "schedule.h"
 
 // Transparent color key for flash mode (magenta = 0xF81F)
 const sf::Color FLASH_TRANSPARENT_COLOR(248, 0, 248);
@@ -185,6 +186,15 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
     
     // RGB565 image buffer for sending
     qualia::Image frameBuffer(qualia::DISPLAY_WIDTH, qualia::DISPLAY_HEIGHT);
+
+    // DisplayConfig scheduler
+    uint8_t currentBrightness = settings.preferences.brightness;
+    Schedule displayConfigSchedule(settings.preferences.brightnessScheduleStr);
+    if (!displayConfigSchedule.empty()) {
+        LOG_INFO << "Parsed brightness schedule \"" << settings.preferences.brightnessScheduleStr << "\" with " << displayConfigSchedule.size() << " entries\n";
+        currentBrightness = displayConfigSchedule.getConfigAt(currentTimeOfDay()).brightness;
+        LOG_INFO << "Initial brightness from schedule: " << static_cast<int>(currentBrightness) << "\n";
+    }
     
     // TCP connection and sender thread
     TcpConnection connection;
@@ -254,10 +264,11 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
     displaySettingsInfo.setExtraHeight(70);
     displaySettingsInfo.enableHoverOverBox(true);
     Checkbox rotate180CB(466, 79, 12, "Rotate 180°", font, 4, -2, settings.preferences.rotate180);
-    Slider brightnessSlider(464, 100, 120, 0, 255, static_cast<float>(settings.preferences.brightness), font);
+    Slider brightnessSlider(464, 100, 120, 0, 255, static_cast<float>(currentBrightness), font);
     sf::Text brightnessLabel(font, "Brightness", 14);
     brightnessLabel.setPosition({590, 99});
     brightnessLabel.setFillColor(sf::Color::Black);
+    InfoIcon brightnessInfo(550, 55, 15, "resources/Info.png", "The brightness setting is periodically overridden by the brightness schedule from the settings.toml file. You can tune the schedule or set it to empty to use the manual brightness knob.", font);
 
     Checkbox realtimeCB((float)(windowWidth - 280), (float)(windowHeight - 22), 12, "Real-time preview", font, 4, -2, settings.preferences.frameLockRealTimePreview);
     realtimeCB.setLabelColor(sf::Color::White);
@@ -588,6 +599,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
                 displaySettingsInfo.handleEvent(*event, mousePos, *window);
                 if (displaySettingsInfo.isHovered()) {
                     rotate180CB.handleEvent(*event, mousePos, *window);
+                    brightnessInfo.handleEvent(*event, mousePos, *window);
                     settings.preferences.rotate180 = rotate180CB.isChecked();
                     brightnessSlider.handleEvent(*event, mousePos, *window);
                     if (brightnessSlider.getValue() != static_cast<float>(settings.preferences.brightness) && !brightnessSlider.isDragging()) {
@@ -825,7 +837,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
                     connectBtn.setColor(sf::Color(255, 100, 100), sf::Color(255, 150, 150));
                     statusIndicator.setFillColor(sf::Color::Green);
                     InitialConfig initialConfig;
-                    initialConfig.brightness = settings.preferences.brightness;
+                    initialConfig.brightness = currentBrightness;
                     sender.start(&connection, initialConfig);
                     frameLock.reset();  // Reset frame lock timing on new connection
                     pendingModeSync = true; // We want to sync mode selection after connecting
@@ -867,6 +879,17 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
             }
             pendingFlashRevert = false;
             waitingForModeSync = false;
+        }
+
+        if (!displayConfigSchedule.empty()) {
+            uint8_t scheduledBrightness = displayConfigSchedule.getConfigAt(currentTimeOfDay()).brightness;
+            if (scheduledBrightness != currentBrightness) {
+                currentBrightness = scheduledBrightness;
+                if (connected) {
+                    LOG_INFO << "Brightness changed to " << (int)currentBrightness << " due to schedule. Sending to device.\n";
+                    sender.sendSetBrightness(currentBrightness);
+                }
+            }
         }
 
         // Disable flash mode checkbox if skin doesn't support it
@@ -1105,6 +1128,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
                 rotate180CB.draw(*window);
                 brightnessSlider.draw(*window);
                 window->draw(brightnessLabel);
+                brightnessInfo.draw(*window);
             }
 
             settingsInfo.draw(*window);
