@@ -70,7 +70,11 @@ void pp_set_brightness(uint8_t brightness) {
     recompute_luts();
 }
 
-void pp_init() {
-    pp_brightness = 255;
+uint8_t pp_get_brightness() {
+    return pp_brightness;
+}
+
+void pp_init(uint8_t brightness) {
+    pp_brightness = brightness;
     recompute_luts();
 }

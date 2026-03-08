@@ -21,8 +21,10 @@ extern uint8_t pp_brightness;  // Current brightness (0-255, 255 = full)
 /// Set brightness (0=black, 255=full). Recomputes LUTs.
 void pp_set_brightness(uint8_t brightness);
 
+uint8_t pp_get_brightness();
+
 /// Initialize post-processing (sets LUTs to identity).
-void pp_init();
+void pp_init(uint8_t brightness = 255);
 
 /// Process one RGB565 pixel: apply brightness + endianness byte-swap for DMA.
 /// This replaces SWAP16() everywhere we write to the DMA buffer.

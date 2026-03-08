@@ -13,6 +13,7 @@ enum class RecvResult {
     TIMEOUT,        // Socket timeout — no data available (not an error)
     DISCONNECTED,
     ERROR,
+    NO_OP_AFTER, // nothing to be done after
 };
 
 // Initialize WiFi station mode

@@ -670,10 +670,13 @@ RecvResult recv_frame(int sock, uint16_t* framebuf, uint8_t& current_mode) {
             return RecvResult::ERROR;
         }
         ESP_LOGI(TAG, "Brightness set to %d", brightness);
-        pp_set_brightness(brightness);
-        // Force full recomposite — existing DMA buffer has old brightness
-        if (s_flash_mgr.is_loaded()) {
-            s_flash_mgr.mark_all_dirty();
+        if (pp_get_brightness() != brightness) {
+            pp_set_brightness(brightness);
+            save_brightness(brightness);
+            // Force full recomposite — existing DMA buffer has old brightness
+            if (s_flash_mgr.is_loaded()) {
+                s_flash_mgr.mark_all_dirty();
+            }
         }
         send_ack(sock);
         return RecvResult::NO_CHANGE;
@@ -889,6 +892,8 @@ void tcp_server_start(uint16_t* framebuf) {
                         s_flash_mgr.init(FLASH_CONFIG_FILE);
                     }
                 }
+            } else if (result == RecvResult::NO_OP_AFTER) {
+                // No-op — nothing to do
             } else if (result == RecvResult::RESET_REQUESTED) {
                 ESP_LOGI(TAG, "Reset requested — restarting ESP32");
                 esp_phy_erase_cal_data_in_nvs(); // Reset PHY calibration data. Sometimes needed to fix WiFi throughput issues

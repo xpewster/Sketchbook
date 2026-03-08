@@ -3,6 +3,7 @@
 #include "protocol.h"
 #include "storage.h"
 #include "postprocess.h"
+#include "nvsm.h"
 
 #include "nvs_flash.h"
 #include "esp_log.h"
@@ -67,7 +68,8 @@ extern "C" void app_main(void) {
     ESP_LOGI(TAG, "Display ready: %dx%d", gfx.width(), gfx.height());
 
     // Step 4: Initialize post-processing pipeline
-    pp_init();
+    uint8_t saved_brightness = load_saved_brightness();
+    pp_init(saved_brightness);
 
     // Step 5: Initialize network buffers
     network_init();
