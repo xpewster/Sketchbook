@@ -2,6 +2,7 @@
 #include <string>
 #include <optional>
 #include <vector>
+#include <functional>
 
 #include "button.cpp"
 #include "text_box.cpp"
@@ -35,6 +36,9 @@ public:
     float boxPadding = 8;
     float extraHeight = 0; // Extra height added to box for padding and action elements
     bool hoverOverBoxCounts = false; // Whether hovering over the info box itself should keep it open
+    float extraHoverHeight = 0;
+
+    std::function<bool()> hoveredLambda;
     
     InfoIcon(float x, float y, float size, const std::string& iconPath, 
              const std::string& info, sf::Font& f, InfoBoxDirection direction = InfoBoxDirection::Down)
@@ -77,6 +81,10 @@ public:
         hoverOverBoxCounts = enable;
     }
 
+    void setExtraHoverHeight(float height) {
+        extraHoverHeight = height;
+    }
+
     void setInfoText(const std::string& info) {
         infoText = info;
         infoTextDisplay.setString(info);
@@ -87,6 +95,10 @@ public:
         boxWidth = width;
         wrapText();
     }
+
+    void setHoveredLambda(std::function<bool()> lambda) {
+        hoveredLambda = std::move(lambda);
+    }
     
     void handleEvent(const sf::Event& event, sf::Vector2i mousePos, sf::RenderWindow& window) {
         const sf::Vector2f mousePosF = window.mapPixelToCoords(mousePos);
@@ -94,7 +106,13 @@ public:
         if (const auto* mouseMoved = event.getIf<sf::Event::MouseMoved>()) {
             bool overIcon = iconSprite && iconSprite->getGlobalBounds().contains(mousePosF);
             bool overBox = hoverOverBoxCounts && hovered && (infoBox.getGlobalBounds().contains(mousePosF) || tail.getGlobalBounds().contains(mousePosF));
-            hovered = overIcon || overBox;
+            bool overExtraHoverArea = hoverOverBoxCounts && hovered
+                    && (mousePosF.y >= infoBox.getGlobalBounds().position.y + infoBox.getGlobalBounds().size.y
+                    && mousePosF.y <= infoBox.getGlobalBounds().position.y + infoBox.getGlobalBounds().size.y + extraHoverHeight
+                    && mousePosF.x >= infoBox.getGlobalBounds().position.x
+                    && mousePosF.x <= infoBox.getGlobalBounds().position.x + infoBox.getGlobalBounds().size.x);
+            bool hoveredFromLambda = hoveredLambda && hoveredLambda();
+            hovered = overIcon || overBox || overExtraHoverArea || hoveredFromLambda;
         }
     }
     

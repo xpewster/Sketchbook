@@ -6,6 +6,7 @@
 #include "esp_log.h"
 #include "esp_netif.h"
 #include "esp_phy_init.h"
+#include "esp_netif_sntp.h"
 #include "nvs_flash.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
@@ -313,6 +314,12 @@ void network_init() {
     }
     init_color_luts();
     s_flash_mgr = FlashModeManager();
+}
+
+void time_sync_init() {
+    ESP_LOGI(TAG, "Initializing SNTP");
+    esp_sntp_config_t config = ESP_NETIF_SNTP_DEFAULT_CONFIG("pool.ntp.org");
+    esp_netif_sntp_init(&config);
 }
 
 bool preload_flash_assets() {
@@ -664,19 +671,25 @@ RecvResult recv_frame(int sock, uint16_t* framebuf, uint8_t& current_mode) {
     }
 
     case proto::MSG_SET_BRIGHTNESS: {
-        uint8_t brightness;
+        uint8_t brightness, _save_brightness;
         if (!recv_exact(sock, &brightness, 1)) {
             ESP_LOGE(TAG, "Failed to receive brightness");
+            return RecvResult::ERROR;
+        }
+        if (!recv_exact(sock, &_save_brightness, 1)) {
+            ESP_LOGE(TAG, "Failed to receive save_brightness");
             return RecvResult::ERROR;
         }
         ESP_LOGI(TAG, "Brightness set to %d", brightness);
         if (pp_get_brightness() != brightness) {
             pp_set_brightness(brightness);
-            save_brightness(brightness);
+            save_brightness(_save_brightness);
             // Force full recomposite — existing DMA buffer has old brightness
             if (s_flash_mgr.is_loaded()) {
                 s_flash_mgr.mark_all_dirty();
             }
+        } else if (pp_get_brightness() != _save_brightness) {
+            save_brightness(_save_brightness);
         }
         send_ack(sock);
         return RecvResult::NO_CHANGE;

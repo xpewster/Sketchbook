@@ -244,6 +244,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
     Checkbox autoMemFlashCB(450, 222, 12, "Auto on skin change", font, 4, -2, settings.preferences.autoMemFlash);
     flashModeInfo.setExtraHeight(48);
     flashModeInfo.enableHoverOverBox(true);
+    flashModeInfo.setHoveredLambda([&]() { return flashDriveInput.isFocused(); });
 
     sf::Text compressionLabel(font, "Compression", 14);
     compressionLabel.setPosition({502, 6});
@@ -263,12 +264,21 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
     InfoIcon displaySettingsInfo(551, 22, 15, "resources/Settings.png", "Display settings", font);
     displaySettingsInfo.setExtraHeight(70);
     displaySettingsInfo.enableHoverOverBox(true);
+    displaySettingsInfo.setExtraHoverHeight(100);
     Checkbox rotate180CB(466, 79, 12, "Rotate 180°", font, 4, -2, settings.preferences.rotate180);
     Slider brightnessSlider(464, 100, 120, 0, 255, static_cast<float>(currentBrightness), font);
     sf::Text brightnessLabel(font, "Brightness", 14);
     brightnessLabel.setPosition({590, 99});
     brightnessLabel.setFillColor(sf::Color::Black);
     InfoIcon brightnessInfo(550, 55, 15, "resources/Info.png", "The brightness setting is periodically overridden by the brightness schedule from the settings.toml file. You can tune the schedule or set it to empty to use the manual brightness knob.", font);
+    brightnessInfo.setExtraHeight(40);
+    brightnessInfo.enableHoverOverBox(true);
+    TextInput brightnessScheduleInput(464, 180, 120, 24, settings.preferences.brightnessScheduleStr, font);
+    Button flashBrightnessScheduleBtn(590, 180, 60, 24, "Save", font);
+    flashBrightnessScheduleBtn.setColor(sf::Color(0, 64, 255), sf::Color(54, 99, 235));
+    flashBrightnessScheduleBtn.setLabelColor(sf::Color::White);
+    displaySettingsInfo.setHoveredLambda([&]() { return brightnessScheduleInput.isFocused() || brightnessSlider.isDragging(); });
+    brightnessInfo.setHoveredLambda([&]() { return brightnessScheduleInput.isFocused(); });
 
     Checkbox realtimeCB((float)(windowWidth - 280), (float)(windowHeight - 22), 12, "Real-time preview", font, 4, -2, settings.preferences.frameLockRealTimePreview);
     realtimeCB.setLabelColor(sf::Color::White);
@@ -481,6 +491,17 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
         settings.save();
         
         if (connected) {
+            if (!displayConfigSchedule.empty()) {
+                // Use the next day's brightness if we're in the last time period of the night
+                uint8_t saveBrightness = currentBrightness;
+                if (displayConfigSchedule.isLastTimePeriodOfNight(currentTimeOfDay())) {
+                    saveBrightness = displayConfigSchedule.getNextConfigAt(currentTimeOfDay()).brightness;
+                }
+                if (saveBrightness != currentBrightness) {
+                    LOG_INFO << "Saving brightness to next day's schedule: " << static_cast<int>(saveBrightness) << "\n";
+                    sender.sendSetBrightness(currentBrightness, saveBrightness);
+                }
+            }
             sender.stop();
             connection.disconnect();
         }
@@ -606,6 +627,12 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
                         settings.preferences.brightness = static_cast<int>(brightnessSlider.getValue());
                         sender.sendSetBrightness(settings.preferences.brightness);
                     }
+                    if (brightnessInfo.isHovered()) {
+                        brightnessScheduleInput.handleEvent(*event, mousePos, *window);
+                        if (brightnessScheduleInput.value != settings.preferences.brightnessScheduleStr) {
+                            settings.preferences.brightnessScheduleStr = brightnessScheduleInput.value;
+                        }
+                    }
                 }
 
                 settingsInfo.handleEvent(*event, mousePos, *window);
@@ -655,7 +682,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
             flashDriveInput.update(mousePos, *window);
 
             // Handle flash export button
-            if (flashBtn.update(mousePos, mousePressed, *window)) {
+            if (flashModeInfo.isHovered() && flashBtn.update(mousePos, mousePressed, *window)) {
                 memFlash(true);
             }
 
@@ -690,6 +717,22 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
                         pausedAutoConnect = true;
                     }
                 }
+            }
+
+            if (flashBrightnessScheduleBtn.update(mousePos, mousePressed, *window)) {
+                displayConfigSchedule = Schedule(settings.preferences.brightnessScheduleStr);
+                if (!displayConfigSchedule.empty()) {
+                    LOG_INFO << "Parsed brightness schedule \"" << settings.preferences.brightnessScheduleStr << "\" with " << displayConfigSchedule.size() << " entries\n";
+                } else {
+                    LOG_INFO << "Brightness schedule cleared.\n";
+                }
+                // flash::AnimeSkinFlashExporter tempExporter(settings.network.espDrive);
+                // if (tempExporter.isFlashable()) {
+                //     LOG_INFO << "Flashing new brightness schedule to drive " << settings.network.espDrive << "\n";
+                //     tempExporter.exportSchedule(settings.preferences.brightnessScheduleStr);
+                // } else {
+                //     LOG_WARN << "Cannot flash new brightness schedule - drive not flashable\n";
+                // }
             }
         }
         
@@ -888,6 +931,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
                 if (connected) {
                     LOG_INFO << "Brightness changed to " << (int)currentBrightness << " due to schedule. Sending to device.\n";
                     sender.sendSetBrightness(currentBrightness);
+                    brightnessSlider.setValue(currentBrightness);
                 }
             }
         }
@@ -1129,6 +1173,10 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
                 brightnessSlider.draw(*window);
                 window->draw(brightnessLabel);
                 brightnessInfo.draw(*window);
+                if (brightnessInfo.isHovered()) {
+                    brightnessScheduleInput.draw(*window);
+                    flashBrightnessScheduleBtn.draw(*window);
+                }
             }
 
             settingsInfo.draw(*window);

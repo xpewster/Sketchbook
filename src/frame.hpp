@@ -134,10 +134,10 @@ public:
         return connection_->sendPacket(&cmd, 1);
     }
 
-    bool sendSetBrightness(uint8_t brightness) {
+    bool sendSetBrightness(uint8_t brightness, uint8_t save_brightness = 0) {
         if (!connection_) return false;
-        uint8_t packet[2] = { protocol::MSG_SET_BRIGHTNESS, brightness }; // Last byte reserved
-        return connection_->sendPacket(packet, 2);
+        uint8_t packet[3] = { protocol::MSG_SET_BRIGHTNESS, brightness, (save_brightness == 0) ? brightness : save_brightness };
+        return connection_->sendPacket(packet, 3);
     }
 
     void invalidateDirtyTracker() {

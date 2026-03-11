@@ -4,6 +4,7 @@
 #include "storage.h"
 #include "postprocess.h"
 #include "nvsm.h"
+#include "schedule.h"
 
 #include "nvs_flash.h"
 #include "esp_log.h"
@@ -23,6 +24,7 @@ static void network_task(void* arg) {
 
     // network_init() already called from app_main before this task launched
     wifi_init();
+    time_sync_init();
     tcp_server_start(framebuf);  // Blocks forever (accept loop)
 
     network_cleanup();
@@ -46,7 +48,7 @@ extern "C" void app_main(void) {
     ESP_LOGI(TAG, "Free PSRAM: %lu KB", heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024);
     ESP_LOGI(TAG, "Free internal: %lu KB", heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024);
 
-    // Step 1: Initialize USB Mass Storage + FAT filesystem
+    // Initialize USB Mass Storage + FAT filesystem
     // This must happen before any assets are loaded from flash.
     if (!storage_init()) {
         ESP_LOGW(TAG, "Storage init failed — flash mode will be unavailable");
@@ -54,32 +56,38 @@ extern "C" void app_main(void) {
         ESP_LOGI(TAG, "Storage ready. Drag flash assets to USB drive at %s", FLASH_ASSETS_DIR);
     }
 
-    // Step 2: Init ST7701S controller via IO expander
+    // Set timezone to Pacific
+    ESP_LOGI(TAG, "Setting timezone to Pacific");
+    setenv("TZ", "PST8PDT,M3.2.0,M11.1.0", 1);  // Pacific
+    tzset();
+
+    // Init ST7701S controller via IO expander
     if (!init_st7701s()) {
         ESP_LOGE(TAG, "ST7701S init failed, halting");
         while (true) vTaskDelay(pdMS_TO_TICKS(1000));
     }
 
-    // Step 3: Init LovyanGFX (sets up RGB panel, allocates DMA framebuffer)
+    // Init LovyanGFX (sets up RGB panel, allocates DMA framebuffer)
     gfx.init();
     gfx.setColorDepth(16);
     gfx.setSwapBytes(true);  // For pushImage fallback path
     gfx.fillScreen(0);
     ESP_LOGI(TAG, "Display ready: %dx%d", gfx.width(), gfx.height());
 
-    // Step 4: Initialize post-processing pipeline
+    // Initialize post-processing pipeline
     uint8_t saved_brightness = load_saved_brightness();
-    pp_init(saved_brightness);
+    uint8_t scheduled_brightness = load_scheduled_brightness(saved_brightness);
+    pp_init(scheduled_brightness);
 
-    // Step 5: Initialize network buffers
+    // Initialize network buffers
     network_init();
 
-    // Step 6: Pre-load flash assets while screen is still black.
+    // Pre-load flash assets while screen is still black.
     // Heavy PSRAM I/O here causes LCD DMA glitching, but the screen is
     // blank so the user doesn't see it.
     preload_flash_assets();
 
-    // Step 7: Load and display idle GIF.
+    // Load and display idle GIF.
     // Now that heavy PSRAM work is done, the idle GIF animates smoothly.
     // Animation task starts on Core 1 and runs through WiFi connect.
     {
@@ -90,7 +98,7 @@ extern "C" void app_main(void) {
         }
     }
 
-    // Step 8: Allocate recv/composite buffer in PSRAM
+    // Allocate recv/composite buffer in PSRAM
     uint16_t* framebuf = (uint16_t*)heap_caps_calloc(
         FRAME_PIXELS, sizeof(uint16_t),
         MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
@@ -100,7 +108,7 @@ extern "C" void app_main(void) {
     }
     ESP_LOGI(TAG, "Recv buffer allocated (%d KB in PSRAM)", FRAME_BYTES / 1024);
 
-    // Step 9: Launch network task on Core 0
+    // Launch network task on Core 0
     // wifi_init() will block for seconds — idle GIF animates on Core 1 meanwhile.
     xTaskCreatePinnedToCore(
         network_task,

@@ -26,6 +26,9 @@ void reconnect_wifi();
 void network_init();
 void network_cleanup();
 
+// Initialize SNTP server for time sync
+void time_sync_init();
+
 // Pre-load flash mode assets based on saved NVS mode.
 // Returns true if flash assets loaded successfully.
 bool preload_flash_assets();

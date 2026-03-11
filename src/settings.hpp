@@ -199,13 +199,13 @@ public:
                 {"color_mode", static_cast<int>(network.colorMode)}
             });
             
-            // Support updating brightness schedule during program execution by retrieving the latest value before save.
-            // Otherwise, the schedule is overwritten on save with the old value. This read value is safe to trust since we don't modify it within the program yet
-            std::filesystem::path settingsPath = getExeDirectory() / "settings.toml";
-            auto latestConfig = toml::parse_file(settingsPath.string());
-            if (auto prefTable = latestConfig["preferences"].as_table()) {
-                preferences.brightnessScheduleStr = (*prefTable)["brightness_schedule"].value_or("");
-            }
+            // // Support updating brightness schedule during program execution by retrieving the latest value before save.
+            // // Otherwise, the schedule is overwritten on save with the old value. This read value is safe to trust since we don't modify it within the program yet
+            // std::filesystem::path settingsPath = getExeDirectory() / "settings.toml";
+            // auto latestConfig = toml::parse_file(settingsPath.string());
+            // if (auto prefTable = latestConfig["preferences"].as_table()) {
+            //     preferences.brightnessScheduleStr = (*prefTable)["brightness_schedule"].value_or("");
+            // }
 
             config.insert_or_assign("preferences", toml::table{
                 {"selected_skin", preferences.selectedSkin},

@@ -78,6 +78,41 @@ public:
         return getConfigAt(TimeOfDay{static_cast<uint16_t>(hour * 60 + minute)});
     }
 
+    // Return true if the given time is in the last time period of the day=latest period that starts before 4am.
+    bool isLastTimePeriodOfNight(TimeOfDay now) const {
+        if (entries_.empty()) return false;
+
+        constexpr TimeOfDay fourAM{4 * 60};
+
+        // Find the entry active just before 4 AM
+        auto nightIt = entries_.upper_bound(TimeOfDay{fourAM.minutesSinceMidnight - 1});
+        if (nightIt == entries_.begin())
+            nightIt = std::prev(entries_.end());
+        else
+            --nightIt;
+
+        // Find the entry active at `now`
+        auto nowIt = entries_.upper_bound(now);
+        if (nowIt == entries_.begin())
+            nowIt = std::prev(entries_.end());
+        else
+            --nowIt;
+
+        return nowIt == nightIt;
+    }
+
+    DisplayConfig getNextConfigAt(TimeOfDay now) const {
+        if (entries_.empty()) {
+            throw std::runtime_error("Schedule is empty");
+        }
+
+        auto it = entries_.upper_bound(now);
+        if (it == entries_.end())
+            it = entries_.begin();
+
+        return it->second;
+    }
+
     /// Direct access to the underlying ordered map.
     const std::map<TimeOfDay, DisplayConfig>& entries() const {
         return entries_;

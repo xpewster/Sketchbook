@@ -181,6 +181,19 @@ public:
     // rotation: Must match the rotation used when streaming frames
     // Must be implemented by derived classes
     virtual ExportResult exportSkin(Skin* skin, ExportRotation rotation) = 0;
+
+    // Write brightness schedule to schedule.txt on the flash drive.
+    // brightnessScheduleStr: e.g. "19:30={210},20:30={170},21:00={120}"
+    bool exportSchedule(const std::string& brightnessScheduleStr) {
+        std::string path = targetDrive_ + "schedule.txt";
+        std::ofstream f(path);
+        if (!f) {
+            std::cerr << "Failed to open " << path << " for writing\n";
+            return false;
+        }
+        f << "brightness=" << brightnessScheduleStr << "\n";
+        return f.good();
+    }
     
     // Check if target drive is flashable (has FLASHABLE marker in root)
     bool isFlashable() const {
