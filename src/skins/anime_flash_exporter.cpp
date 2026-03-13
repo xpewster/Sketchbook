@@ -406,7 +406,8 @@ private:
             "skin.weather.icon.thunderstorm",
             "skin.weather.icon.foggy",
             "skin.weather.icon.windy",
-            "skin.weather.icon.night"
+            "skin.weather.icon.night",
+            "skin.weather.icon.snowy"
         };
         const char* outBasenames[] = {
             "weather_sunny",
@@ -415,7 +416,8 @@ private:
             "weather_thunderstorm",
             "weather_foggy",
             "weather_windy",
-            "weather_night"
+            "weather_night",
+            "weather_snowy"
         };
         
         // Get target dimensions for weather icons (0 = use original size)
@@ -908,7 +910,7 @@ private:
             cfg << "weather_h=" << origWW << "\n";  // Swapped
             
             // Animation info for each weather type
-            const char* weatherTypes[] = {"sunny", "cloudy", "rainy", "thunderstorm", "foggy", "windy", "night"};
+            const char* weatherTypes[] = {"sunny", "cloudy", "rainy", "thunderstorm", "foggy", "windy", "night", "snowy"};
             for (const char* wtype : weatherTypes) {
                 std::string keyBase = std::string("skin.weather.icon.") + wtype;
                 bool animated = getParamBool(params, keyBase + ".animation.enabled", false);

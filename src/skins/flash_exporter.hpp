@@ -36,7 +36,8 @@ enum WeatherIconIndex : uint8_t {
     WEATHER_FOGGY = 4,
     WEATHER_WINDY = 5,
     WEATHER_NIGHT = 6,
-    WEATHER_COUNT = 7
+    WEATHER_SNOWY = 7,
+    WEATHER_COUNT = 8
 };
 
 // Character state indices
@@ -115,6 +116,7 @@ int getWeatherIconIndex(const WeatherData& weather) {
     if (weatherType == "thunderstorm") return WEATHER_THUNDERSTORM;
     if (weatherType == "foggy") return WEATHER_FOGGY;
     if (weatherType == "windy") return WEATHER_WINDY;
+    if (weatherType == "snowy") return WEATHER_SNOWY;
     
     if (weather.isNight) return WEATHER_NIGHT;
     return WEATHER_SUNNY;

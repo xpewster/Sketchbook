@@ -38,14 +38,14 @@ inline std::string getWeatherIconNameSimplified(const WeatherData& weather) {
             else if (iconCode == "03" || iconCode == "04") return "cloudy";
             else if (iconCode == "09" || iconCode == "10") return "rainy";
             else if (iconCode == "11") return "thunderstorm";
-            else if (iconCode == "13") return "sunny"; // Treat snow as sunny for now
+            else if (iconCode == "13") return "snowy";
             else if (iconCode == "50") return "foggy";
         } else {
             if (iconCode == "01" || iconCode == "02" || iconCode == "03") return "night";
             else if (iconCode == "04") return "cloudy";
             else if (iconCode == "09" || iconCode == "10") return "rainy";
             else if (iconCode == "11") return "thunderstorm";
-            else if (iconCode == "13") return "night"; // Treat snow as sunny for now
+            else if (iconCode == "13") return "snowy";
             else if (iconCode == "50") return "foggy";
         }
     }

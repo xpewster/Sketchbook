@@ -312,7 +312,7 @@ bool FlashModeManager::init(const char* config_path) {
     // --- Weather icons ---
     if (_config.get_bool("weather_enabled")) {
         static const char* names[] = {
-            "sunny", "cloudy", "rainy", "thunderstorm", "foggy", "windy", "night"
+            "sunny", "cloudy", "rainy", "thunderstorm", "foggy", "windy", "night", "snowy"
         };
 
         int wx = _config.get_int("weather_x", 0);

@@ -122,7 +122,7 @@ class FlashModeManager:
         
         # Load weather icons
         if get_config_bool(self.config, 'weather_enabled'):
-            weather_names = ['sunny', 'cloudy', 'rainy', 'thunderstorm', 'foggy', 'windy', 'night']
+            weather_names = ['sunny', 'cloudy', 'rainy', 'thunderstorm', 'foggy', 'windy', 'night', 'snowy']
             for i, name in enumerate(weather_names):
                 # Check config for file (could be .gif or .r565)
                 file_key = f'weather_{name}_file'

@@ -37,6 +37,7 @@
     - "skin.weather.icon.night.png": Path to night weather icon (+ animation params)
     - "skin.weather.icon.windy.png": Path to windy weather icon (+ animation params)
     - "skin.weather.icon.foggy.png": Path to foggy weather icon (+ animation params)
+    - "skin.weather.icon.snowy.png": Path to snowy weather icon (+ animation params)
     - "skin.weather.icon.width": Width of weather icon
     - "skin.weather.icon.height": Height of weather icon
     - "skin.weather.icon.x": X position of weather icon
@@ -167,6 +168,7 @@ private:
     std::vector<sf::Texture> weatherIconNightFrames;
     std::vector<sf::Texture> weatherIconWindyFrames;
     std::vector<sf::Texture> weatherIconFoggyFrames;
+    std::vector<sf::Texture> weatherIconSnowyFrames;
     bool hasWeatherIconSunny = false;
     bool hasWeatherIconRainy = false;
     bool hasWeatherIconThunderstorm = false;
@@ -174,6 +176,7 @@ private:
     bool hasWeatherIconNight = false;
     bool hasWeatherIconWindy = false;
     bool hasWeatherIconFoggy = false;
+    bool hasWeatherIconSnowy = false;
     // Animation settings per weather type
     bool weatherIconSunnyAnimated = false;
     bool weatherIconRainyAnimated = false;
@@ -182,6 +185,7 @@ private:
     bool weatherIconNightAnimated = false;
     bool weatherIconWindyAnimated = false;
     bool weatherIconFoggyAnimated = false;
+    bool weatherIconSnowyAnimated = false;
     float weatherIconSunnyAnimSpeed = 1.0f;
     float weatherIconRainyAnimSpeed = 1.0f;
     float weatherIconThunderstormAnimSpeed = 1.0f;
@@ -189,6 +193,7 @@ private:
     float weatherIconNightAnimSpeed = 1.0f;
     float weatherIconWindyAnimSpeed = 1.0f;
     float weatherIconFoggyAnimSpeed = 1.0f;
+    float weatherIconSnowyAnimSpeed = 1.0f;
     int weatherIconSunnyFrameCount = 1;
     int weatherIconRainyFrameCount = 1;
     int weatherIconThunderstormFrameCount = 1;
@@ -196,6 +201,7 @@ private:
     int weatherIconNightFrameCount = 1;
     int weatherIconWindyFrameCount = 1;
     int weatherIconFoggyFrameCount = 1;
+    int weatherIconSnowyFrameCount = 1;
     float weatherIconWidth = 32;
     float weatherIconHeight = 32;
     float weatherIconX = 0;
@@ -402,6 +408,11 @@ private:
             info.animated = weatherIconWindyAnimated;
             info.animSpeed = weatherIconWindyAnimSpeed;
             info.frameCount = weatherIconWindyFrameCount;
+        } else if (weatherType == "snowy" && hasWeatherIconSnowy) {
+            info.frames = &weatherIconSnowyFrames;
+            info.animated = weatherIconSnowyAnimated;
+            info.animSpeed = weatherIconSnowyAnimSpeed;
+            info.frameCount = weatherIconSnowyFrameCount;
         } else {
             // Default to day/night if available
             if (weather.isNight && hasWeatherIconNight) {
@@ -441,6 +452,10 @@ private:
             if (hasWeatherIconThunderstorm && !weatherIconThunderstormFrames.empty()) return &weatherIconThunderstormFrames[0];
         } else if (weatherType == "foggy") {
             if (hasWeatherIconFoggy && !weatherIconFoggyFrames.empty()) return &weatherIconFoggyFrames[0];
+        } else if (weatherType == "windy") {
+            if (hasWeatherIconWindy && !weatherIconWindyFrames.empty()) return &weatherIconWindyFrames[0];
+        } else if (weatherType == "snowy") {
+            if (hasWeatherIconSnowy && !weatherIconSnowyFrames.empty()) return &weatherIconSnowyFrames[0];
         }
 
         // Default to day/night if available
@@ -510,6 +525,7 @@ private:
             weatherIconNightFrames.clear();
             weatherIconWindyFrames.clear();
             weatherIconFoggyFrames.clear();
+            weatherIconSnowyFrames.clear();
         }
         parametersRefreshed = false;
 
@@ -641,6 +657,9 @@ private:
         loadWeatherIcon("skin.weather.icon.foggy", weatherIconFoggyFrames,
                         hasWeatherIconFoggy, weatherIconFoggyAnimated,
                         weatherIconFoggyAnimSpeed, weatherIconFoggyFrameCount);
+        loadWeatherIcon("skin.weather.icon.snowy", weatherIconSnowyFrames,
+                        hasWeatherIconSnowy, weatherIconSnowyAnimated,
+                        weatherIconSnowyAnimSpeed, weatherIconSnowyFrameCount);
 
         weatherIconWidth = getParamFloat("skin.weather.icon.width", 32);
         weatherIconHeight = getParamFloat("skin.weather.icon.height", 32);
