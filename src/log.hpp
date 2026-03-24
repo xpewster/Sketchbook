@@ -4,6 +4,8 @@
 #include <string>
 #include <sstream>
 #include <mutex>
+#include <unordered_map>
+#include <memory>
 #include <filesystem>
 #include <chrono>
 #include <iomanip>
@@ -25,10 +27,22 @@ enum class Level {
 class Logger {
 public:
 
-    // Get singleton instance
+    // Get default singleton instance
     static Logger& getInstance() {
         static Logger instance;
         return instance;
+    }
+
+    // Get named instance (writes to YYYY-MM-DD_suffix.log)
+    static Logger& getInstance(const std::string& suffix) {
+        static std::mutex mapMutex;
+        static std::unordered_map<std::string, std::unique_ptr<Logger>> instances;
+        std::lock_guard<std::mutex> lock(mapMutex);
+        auto it = instances.find(suffix);
+        if (it == instances.end()) {
+            it = instances.emplace(suffix, std::unique_ptr<Logger>(new Logger(suffix))).first;
+        }
+        return *it->second;
     }
 
     // Delete copy/move constructors
@@ -125,15 +139,15 @@ public:
         }
     }
 
-private:
-    Logger() {
-        initializeLogger();
-    }
-
     ~Logger() {
         if (log_file_.is_open()) {
             log_file_.close();
         }
+    }
+
+private:
+    Logger(const std::string& suffix = "") : suffix_(suffix) {
+        initializeLogger();
     }
 
     void initializeLogger() {
@@ -157,7 +171,7 @@ private:
         auto now = std::chrono::system_clock::now();
         current_date_ = getDateString(now);
         
-        std::string log_path = "logs/" + current_date_ + ".log";
+        std::string log_path = "logs/" + current_date_ + (suffix_.empty() ? "" : "_" + suffix_) + ".log";
         log_file_.open(log_path, std::ios::app);
         
         if (!log_file_.is_open()) {
@@ -167,14 +181,19 @@ private:
 
     void cleanupOldLogs() {
         const size_t MAX_LOG_FILES = 5;
+        std::string fileSuffix = (suffix_.empty() ? "" : "_" + suffix_) + ".log";
         
         std::vector<fs::path> log_files;
         
-        // Collect all .log files in the logs directory
+        // Collect log files matching this logger's suffix pattern
         if (fs::exists("logs") && fs::is_directory("logs")) {
             for (const auto& entry : fs::directory_iterator("logs")) {
-                if (entry.is_regular_file() && entry.path().extension() == ".log") {
-                    log_files.push_back(entry.path());
+                if (entry.is_regular_file()) {
+                    std::string name = entry.path().filename().string();
+                    if (name.size() >= fileSuffix.size() &&
+                        name.compare(name.size() - fileSuffix.size(), fileSuffix.size(), fileSuffix) == 0) {
+                        log_files.push_back(entry.path());
+                    }
                 }
             }
         }
@@ -225,6 +244,7 @@ private:
 
     std::ofstream log_file_;
     std::string current_date_;
+    std::string suffix_;
     std::mutex mutex_;
 };
 

@@ -16,7 +16,7 @@ constexpr uint8_t FLAG_WEATHER_AVAIL = 0x04;
 constexpr uint8_t FLAG_TRAIN0_AVAIL  = 0x08;
 constexpr uint8_t FLAG_TRAIN1_AVAIL  = 0x10;
 
-constexpr int NUM_WEATHER_ICONS = 8;  // sunny, cloudy, rainy, thunderstorm, foggy, windy, night, snowy
+constexpr int NUM_WEATHER_ICONS = 8;
 
 // Dirty row bitmask size (960 rows / 8 = 120 bytes)
 constexpr int DIRTY_BITMASK_BYTES = (FRAME_HEIGHT + 7) / 8;

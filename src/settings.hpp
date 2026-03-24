@@ -49,6 +49,8 @@ public:
         bool resetAfterFlash = true;
         uint8_t brightness = 255; // 0-255
         std::string brightnessScheduleStr = ""; // e.g. "19:30={200},21:30={160},06:00={255}"
+        bool espLogging = false;
+        std::string espSerialPort; // e.g. "COM3"
     };
 
     struct TrainConfig {
@@ -94,6 +96,8 @@ public:
                 preferences.resetAfterFlash = (*prefTable)["reset_after_flash"].value_or(true);
                 preferences.brightness = (*prefTable)["brightness"].value_or(255);
                 preferences.brightnessScheduleStr = (*prefTable)["brightness_schedule"].value_or("");
+                preferences.espLogging = (*prefTable)["esp_logging"].value_or(false);
+                preferences.espSerialPort = (*prefTable)["esp_serial_port"].value_or("");
             }
             LOG_INFO << "Loaded preferences: selectedSkin=" << preferences.selectedSkin 
                      << ", rotate180=" << preferences.rotate180
@@ -108,6 +112,8 @@ public:
                      << ", resetAfterFlash=" << preferences.resetAfterFlash
                      << ", brightness=" << static_cast<int>(preferences.brightness)
                      << ", brightnessSchedule=" << preferences.brightnessScheduleStr
+                     << ", espLogging=" << preferences.espLogging
+                     << ", espSerialPort=" << (preferences.espSerialPort.empty() ? "NOT SET" : preferences.espSerialPort)
                      << "\n";
             
             // Parse weather settings
@@ -220,7 +226,9 @@ public:
                 {"auto_mem_flash", preferences.autoMemFlash},
                 {"reset_after_flash", preferences.resetAfterFlash},
                 {"brightness", preferences.brightness},
-                {"brightness_schedule", preferences.brightnessScheduleStr}
+                {"brightness_schedule", preferences.brightnessScheduleStr},
+                {"esp_logging", preferences.espLogging},
+                {"esp_serial_port", preferences.espSerialPort}
             });
 
             config.insert_or_assign("train", toml::table{
@@ -304,7 +312,9 @@ private:
             {"close_to_tray", true},
             {"auto_connect", true},
             {"brightness", 255},
-            {"brightness_schedule", "19:30={200},21:30={160},06:00={255}"}
+            {"brightness_schedule", "19:30={200},21:30={160},06:00={255}"},
+            {"esp_logging", false},
+            {"esp_serial_port", ""}
         });
 
         config.insert_or_assign("train", toml::table{

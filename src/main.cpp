@@ -24,6 +24,7 @@
 #include <atomic>
 #include <format>
 #include <optional>
+#include "serial_port.h"
 
 #include "ui/text_box.cpp"
 #include "ui/button.cpp"
@@ -215,6 +216,32 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
     
     // Train monitor
     TrainMonitor trainMonitor(settings.train.apiBase, settings.train.apiKey, settings.train.stopId0, settings.train.stopId1);
+    
+
+    // Serial port for esp logging and offline resets
+    SerialPort serial;
+    auto tryOpenSerialPort = [&serial, &settings]() {
+        if (settings.preferences.espSerialPort != "" && !serial.isOpen()) {
+            if (serial.open(settings.preferences.espSerialPort)) {
+                LOG_INFO << "Opened serial port: " << settings.preferences.espSerialPort << "\n";
+            } else {
+                LOG_ERROR << "Failed to open serial port: " << settings.preferences.espSerialPort << "\n";
+            }
+        }
+        if (settings.preferences.espLogging && serial.isOpen()) {
+            serial.startMonitor(settings.preferences.espSerialPort);
+            LOG_INFO << "Started ESP serial monitor thread\n";
+        }
+    };
+    auto closeSerialPort = [&serial, &settings]() {
+        if (serial.isOpen()) {
+            serial.stopMonitor();
+            serial.close();
+            LOG_INFO << "Closed serial port: " << settings.preferences.espSerialPort << "\n";
+        }
+    };
+    tryOpenSerialPort();
+    
 
     // Status
     std::string statusMsg = "Disconnected";
@@ -288,13 +315,17 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
     previewCompositeCB.setLabelColor(sf::Color::White);
 
     InfoIcon settingsInfo((float)(windowWidth - 50), 10, 15, "resources/Settings.png", "Settings", font, InfoBoxDirection::Left);
-    settingsInfo.setExtraHeight(130);
+    settingsInfo.setExtraHeight(150);
     settingsInfo.enableHoverOverBox(true);
     Checkbox startupSettingCB((float)(windowWidth - 200), 64, 12, "Start with Windows", font, 4, -2, startupManager.IsInStartup());
     Checkbox startMinimizedSettingCB((float)(windowWidth - 200), 84, 12, "Start minimized", font, 4, -2, settings.preferences.startMinimized);
     Checkbox closeToTraySettingCB((float)(windowWidth - 200), 104, 12, "Close to tray", font, 4, -2, settings.preferences.closeToTray);
     Checkbox autoConnectSettingCB((float)(windowWidth - 200), 124, 12, "AutoConnect", font, 4, -2, settings.preferences.autoConnect);
-    Button resetBoardSettingsBtn((float)(windowWidth - 200), 144, 90, 24, "Reset board", font);
+    Checkbox espLoggingSettingCB((float)(windowWidth - 200), 144, 12, "ESP logging", font, 4, -2, settings.preferences.espLogging);
+    TextInput espSerialPortInput((float)(windowWidth - 100), 140, 50, 24, settings.preferences.espSerialPort, font);
+    espSerialPortInput.setPlaceholder("COM#");
+    settingsInfo.setHoveredLambda([&]() { return espSerialPortInput.isFocused(); });
+    Button resetBoardSettingsBtn((float)(windowWidth - 200), 164, 90, 24, "Reset board", font);
     resetBoardSettingsBtn.setColor(sf::Color(235, 180, 52), sf::Color(245, 205, 86));
     
     // Status indicator
@@ -405,6 +436,26 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
         }
     };
 
+    auto resetBoard = [&]() {
+        if (connected) {
+            LOG_INFO << "Sending reset command to board over network\n";
+            if (sender.sendReset()) {
+                LOG_INFO << "Reset command sent successfully\n";
+            } else {
+                LOG_WARN << "Failed to send reset command\n";
+                statusMsg = "Failed to send reset command";
+            }
+        } else {
+            LOG_INFO << "Sending reset command to board over serial\n";
+            if (serial.resetDevice(settings.preferences.espSerialPort)) {
+                LOG_INFO << "Reset command sent successfully\n";
+            } else {
+                LOG_WARN << "Failed to send reset command\n";
+                statusMsg = "Failed to send reset command";
+            }
+        }
+    };
+
     auto memFlash = [&](bool suppressNotification = false) {
         if (connected) {
             suppressNotifsDuringMemFlash = true;
@@ -435,7 +486,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
                 // Send reset if needed so board can load new assets
                 if (settings.preferences.resetAfterFlash) {
                     LOG_INFO << "Resetting board after flash export\n";
-                    sender.sendReset();
+                    resetBoard();
                 }
             } else {
                 LOG_WARN << "Flash export failed: " << result.error << "\n";
@@ -491,17 +542,17 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
         settings.save();
         
         if (connected) {
-            if (!displayConfigSchedule.empty()) {
-                // Use the next day's brightness if we're in the last time period of the night
-                uint8_t saveBrightness = currentBrightness;
-                if (displayConfigSchedule.isLastTimePeriodOfNight(currentTimeOfDay())) {
-                    saveBrightness = displayConfigSchedule.getNextConfigAt(currentTimeOfDay()).brightness;
-                }
-                if (saveBrightness != currentBrightness) {
-                    LOG_INFO << "Saving brightness to next day's schedule: " << static_cast<int>(saveBrightness) << "\n";
-                    sender.sendSetBrightness(currentBrightness, saveBrightness);
-                }
-            }
+            // if (!displayConfigSchedule.empty()) {
+            //     // Use the next day's brightness if we're in the last time period of the night
+            //     uint8_t saveBrightness = currentBrightness;
+            //     if (displayConfigSchedule.isLastTimePeriodOfNight(currentTimeOfDay())) {
+            //         saveBrightness = displayConfigSchedule.getNextConfigAt(currentTimeOfDay()).brightness;
+            //     }
+            //     if (saveBrightness != currentBrightness) {
+            //         LOG_INFO << "Saving brightness to next day's schedule: " << static_cast<int>(saveBrightness) << "\n";
+            //         sender.sendSetBrightness(currentBrightness, saveBrightness);
+            //     }
+            // }
             sender.stop();
             connection.disconnect();
         }
@@ -651,6 +702,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
                     closeToTraySettingCB.handleEvent(*event, mousePos, *window);
                     settings.preferences.closeToTray = closeToTraySettingCB.isChecked();
                     autoConnectSettingCB.handleEvent(*event, mousePos, *window);
+                    espLoggingSettingCB.handleEvent(*event, mousePos, *window);
+                    espSerialPortInput.handleEvent(*event, mousePos, *window);
+                    settings.preferences.espSerialPort = espSerialPortInput.value;
                     if (autoConnectSettingCB.wasJustUpdated()) {
                         settings.preferences.autoConnect = autoConnectSettingCB.isChecked();
                     }
@@ -673,6 +727,14 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
                                 LOG_ERROR << "Failed to remove from Windows startup.\n";
                                 startupSettingCB.setChecked(true);
                             }
+                        }
+                    }
+                    if (espLoggingSettingCB.wasJustUpdated()) {
+                        settings.preferences.espLogging = espLoggingSettingCB.isChecked();
+                        if (settings.preferences.espLogging) {
+                            tryOpenSerialPort(); // Won't do anything if port is already open
+                        } else {
+                            closeSerialPort();
                         }
                     }
                 }
@@ -792,20 +854,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
             LOG_INFO << "Resetting session stats on skin refresh\n";
         }
         if (windowInitiatedReset || trayManager.ShouldResetBoard()) {
-            if (connected) {
-                LOG_INFO << "Resetting board...\n";
-                if (sender.sendReset()) {
-                    LOG_INFO << "Reset command sent successfully.\n";
-                } else {
-                    LOG_ERROR << "Failed to send reset command.\n";
-                    statusMsg = "Failed to send reset command";
-                }
-            } else {
-                LOG_WARN << "Cannot reset board - not connected\n";
-                trayManager.ShowNotification("Cannot reset board", "Sketchbook must be connected to the remote board to reset it.", NIIF_WARNING);
-                statusMsg = "Not connected - cannot reset board";
-            }
+            resetBoard();
         }
+
         if (trayManager.ShouldReconnectWifi()) {
             if (connected) {
                 LOG_INFO << "Sending WiFi reconnect command...\n";
@@ -930,7 +981,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
                 currentBrightness = scheduledBrightness;
                 if (connected) {
                     LOG_INFO << "Brightness changed to " << (int)currentBrightness << " due to schedule. Sending to device.\n";
-                    sender.sendSetBrightness(currentBrightness);
+                    sender.sendSetBrightness(currentBrightness, 255);
                     brightnessSlider.setValue(currentBrightness);
                 }
             }
@@ -1185,6 +1236,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
                 startMinimizedSettingCB.draw(*window);
                 closeToTraySettingCB.draw(*window);
                 autoConnectSettingCB.draw(*window);
+                espLoggingSettingCB.draw(*window);
+                espSerialPortInput.draw(*window);
                 resetBoardSettingsBtn.draw(*window);
             }
             window->draw(statusIndicator);
@@ -1241,6 +1294,12 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
     // Clean shutdown
     if (connectThread.joinable()) {
         connectThread.join();
+    }
+    if (serial.isOpen()) {
+        serial.close();
+        if (serial.isMonitoring()) {
+            serial.stopMonitor();
+        }
     }
     saveAndQuit();
     

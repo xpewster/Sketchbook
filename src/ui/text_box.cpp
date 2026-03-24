@@ -13,6 +13,7 @@ public:
     bool focused = false;
     size_t cursorPos = 0;
     sf::Clock cursorBlinkClock;
+    std::string placeholderText = "";
 
     float boxX, boxY;
     float width, height;
@@ -49,6 +50,10 @@ public:
     std::string getSelectedText() const {
         auto [start, end] = getSelectionRange();
         return value.substr(start, end - start);
+    }
+
+    void setPlaceholder(const std::string& placeholder) {
+        placeholderText = placeholder;
     }
 
     bool isFocused() const { return focused; }
@@ -258,7 +263,16 @@ public:
             window.draw(selRect);
         }
 
-        window.draw(text);
+        if (value.empty() && !focused) {
+            // Draw placeholder text if empty and not focused
+            sf::Text placeholder(text);
+            placeholder.setString(placeholderText);
+            placeholder.setFillColor(sf::Color(150, 150, 150));
+            window.draw(placeholder);
+        } else {
+            // Draw actual text
+            window.draw(text);
+        }
 
         // Draw blinking cursor when focused
         if (focused && (int)(cursorBlinkClock.getElapsedTime().asSeconds() * 2) % 2 == 0) {

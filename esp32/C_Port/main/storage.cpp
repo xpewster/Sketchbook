@@ -21,6 +21,18 @@ static tinyusb_msc_storage_handle_t s_storage_hdl = nullptr;
 static std::atomic<bool> s_fs_available{false};
 static SemaphoreHandle_t s_fs_sem = nullptr;
 
+// Create reset callback for driver program to trigger
+static void cdc_rx_callback(int itf, cdcacm_event_t *event) {
+    uint8_t buf[64];
+    size_t rx_size = 0;
+    tinyusb_cdcacm_read((tinyusb_cdcacm_itf_t)itf, buf, sizeof(buf), &rx_size);
+    for (size_t i = 0; i < rx_size; i++) {
+        if (buf[i] == 0xFF) {
+            esp_restart();
+        }
+    }
+}
+
 // ============================================================
 // USB MSC Event Callback (v2.0 signature)
 // ============================================================
@@ -59,7 +71,7 @@ static void storage_event_cb(tinyusb_msc_storage_handle_t handle,
 bool storage_init() {
     s_fs_sem = xSemaphoreCreateBinary();
 
-    // Step 1: Mount FAT partition with wear levelling for local file access
+    // Mount FAT partition with wear levelling for local file access
     const esp_vfs_fat_mount_config_t mount_config = {
         .format_if_mount_failed = true,
         .max_files = 8,
@@ -78,7 +90,7 @@ bool storage_init() {
     ESP_LOGI(TAG, "FAT partition mounted at %s", FLASH_MOUNT_POINT);
     s_fs_available.store(true);
 
-    // Step 2: Create MSC storage backed by SPI flash (v2.0 API)
+    // Create MSC storage backed by SPI flash (v2.0 API)
     tinyusb_msc_storage_config_t msc_cfg = {};
     msc_cfg.medium.wl_handle = s_wl_handle;
 
@@ -88,10 +100,10 @@ bool storage_init() {
         return false;
     }
 
-    // Step 3: Register storage event callback
+    // Register storage event callback
     tinyusb_msc_set_storage_callback(storage_event_cb, nullptr);
 
-    // Step 4: Install TinyUSB driver with default config
+    // Install TinyUSB driver with default config
     tinyusb_config_t tusb_cfg = TINYUSB_DEFAULT_CONFIG();
     err = tinyusb_driver_install(&tusb_cfg);
     if (err != ESP_OK) {
@@ -99,7 +111,7 @@ bool storage_init() {
         return false;
     }
 
-    // Step 5: Initialize CDC-ACM for serial console (composite CDC+MSC device)
+    // Initialize CDC-ACM for serial console (composite CDC+MSC device)
     tinyusb_config_cdcacm_t acm_cfg = {};
     acm_cfg.cdc_port = TINYUSB_CDC_ACM_0;
     err = tusb_cdc_acm_init(&acm_cfg);
@@ -108,12 +120,15 @@ bool storage_init() {
         return false;
     }
 
-    // Step 6: Redirect stdout/stderr to TinyUSB CDC
+    // Redirect stdout/stderr to TinyUSB CDC
     esp_tusb_init_console(TINYUSB_CDC_ACM_0);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Console redirect failed: %s", esp_err_to_name(err));
         // Non-fatal — MSC still works, just no serial output
     }
+
+    // Register RX callback to handle USB reset signal from driver program
+    tinyusb_cdcacm_register_callback(TINYUSB_CDC_ACM_0, CDC_EVENT_RX, &cdc_rx_callback);
 
     ESP_LOGI(TAG, "USB MSC active — drag files to %s via USB", FLASH_ASSETS_DIR);
     return true;
