@@ -193,13 +193,17 @@ static void wifi_event_handler(void* arg, esp_event_base_t base,
     if (base == WIFI_EVENT && id == WIFI_EVENT_STA_START && !pause_connect) {
         esp_wifi_connect();
     } else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED && !pause_connect) {
-        if (s_retry_num < MAX_RETRY) {
+        // if (s_retry_num < MAX_RETRY) {
+            int delay_ms = MIN(1000 * (1 << MIN(s_retry_num, 4)), 30000);
+            ESP_LOGI(TAG, "WiFi disconnected, retry #%d in %dms", s_retry_num + 1, delay_ms);
+            vTaskDelay(pdMS_TO_TICKS(delay_ms));
             esp_wifi_connect();
             s_retry_num++;
             ESP_LOGI(TAG, "WiFi retry %d/%d", s_retry_num, MAX_RETRY);
-        } else {
-            xEventGroupSetBits(s_wifi_event_group, WIFI_FAIL_BIT);
-        }
+        // }
+        // else {
+        //     xEventGroupSetBits(s_wifi_event_group, WIFI_FAIL_BIT);
+        // }
     } else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
         auto* event = (ip_event_got_ip_t*)data;
         ESP_LOGI(TAG, "Got IP: " IPSTR, IP2STR(&event->ip_info.ip));

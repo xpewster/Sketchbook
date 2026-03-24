@@ -3,6 +3,8 @@
 #include <cstdint>
 #include <cstddef>
 
+#define MIN(a, b) (((a) < (b)) ? (a) : (b))
+
 // Result of recv_frame()
 enum class RecvResult {
     OK,
