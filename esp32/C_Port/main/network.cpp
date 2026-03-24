@@ -194,7 +194,7 @@ static void wifi_event_handler(void* arg, esp_event_base_t base,
         esp_wifi_connect();
     } else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED && !pause_connect) {
         // if (s_retry_num < MAX_RETRY) {
-            int delay_ms = MIN(1000 * (1 << MIN(s_retry_num, 4)), 30000);
+            int delay_ms = 500; // MIN(1000 * (1 << MIN(s_retry_num, 4)), 30000);
             ESP_LOGI(TAG, "WiFi disconnected, retry #%d in %dms", s_retry_num + 1, delay_ms);
             vTaskDelay(pdMS_TO_TICKS(delay_ms));
             esp_wifi_connect();
