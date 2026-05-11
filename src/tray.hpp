@@ -73,6 +73,10 @@ private:
     static constexpr int MAX_RETRY_COUNT = 30;
     static constexpr int RETRY_DELAY_MS = 2000;
 
+    std::atomic<bool> mainWindowIsForeground;
+    std::atomic<DWORD> lostForegroundTickCount;
+    static constexpr DWORD FOREGROUND_GRACE_MS = 250;
+
     std::chrono::steady_clock::time_point lastImportantNotificationTime; // Cannot show other notifications within N seconds of this time
     static constexpr int NOTIFICATION_COOLDOWN_SECONDS = 5;
 
@@ -90,10 +94,23 @@ private:
         switch (uMsg) {
             case WM_TRAYICON:
                 switch (lParam) {
-                    case WM_LBUTTONDOWN:
-                        shouldRestore = true;
+                    case WM_LBUTTONDOWN: {
+                        // Check if main window is visible and foreground (or was recently foreground since shell can sometimes steal focus)
+                        bool isVisible = (mainHwnd && IsWindowVisible(mainHwnd));
+                        bool wasForeground = mainWindowIsForeground.load();
+                        if (!wasForeground) {
+                            DWORD lostAt = lostForegroundTickCount.load();
+                            if (lostAt != 0 && (GetTickCount() - lostAt) <= FOREGROUND_GRACE_MS) {
+                                wasForeground = true;
+                            }
+                        }
+                        if (isVisible && wasForeground) {
+                            MinimizeToTray();
+                        } else {
+                            shouldRestore = true;
+                        }
                         break;
-                        
+                    }
                     case WM_RBUTTONUP:
                     case WM_CONTEXTMENU: {
                         POINT pt;
@@ -137,6 +154,14 @@ private:
                 if (wParam == 1) {
                     // Retry adding tray icon
                     TryAddTrayIcon();
+                } else if (wParam == 2) {
+                    HWND fg = GetForegroundWindow();
+                    if (fg && fg == mainHwnd) {
+                        mainWindowIsForeground.store(true);
+                        lostForegroundTickCount.store(0);
+                    } else if (mainWindowIsForeground.exchange(false)) {
+                        lostForegroundTickCount.store(GetTickCount());
+                    }
                 }
                 break;
             
@@ -396,6 +421,9 @@ private:
         
         // Try to add the tray icon (with retry if shell isn't ready)
         TryAddTrayIcon();
+
+        // Start timer to monitor foreground window changes (for better restore behavior)
+        SetTimer(trayHwnd, 2, 100, NULL);
         
         running = true;
         
@@ -426,7 +454,8 @@ public:
           selectedSkinIndex(-1),
           running(false), connectionState(ConnectionState::Disconnected),
           flashModeState(false), frameLockState(false),
-          currentSkinIndex(-1), iconAdded(false), retryCount(0) {
+          currentSkinIndex(-1), iconAdded(false), retryCount(0),
+          mainWindowIsForeground(false), lostForegroundTickCount(0) {
         
         ZeroMemory(&nid, sizeof(NOTIFYICONDATA));
         
