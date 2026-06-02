@@ -21,6 +21,17 @@ struct DisplayConfig {
     }
 };
 
+struct SkinConfig {
+    std::string skinName;
+
+    bool operator==(const SkinConfig& other) const {
+        return skinName == other.skinName;
+    }
+    bool operator!=(const SkinConfig& other) const {
+        return !(*this == other);
+    }
+};
+
 // Represents minutes since midnight [0, 1440).
 struct TimeOfDay {
     uint16_t minutesSinceMidnight;
@@ -40,14 +51,51 @@ inline TimeOfDay currentTimeOfDay() {
     return TimeOfDay{static_cast<uint16_t>(local.tm_hour * 60 + local.tm_min)};
 }
 
-/// A daily schedule mapping time-of-day entries to DisplayConfig values.
+// ---------------------------------------------------------------------------
+// Parsers
+// ---------------------------------------------------------------------------
+
+struct DisplayConfigParser {
+    static DisplayConfig parse(const std::string& inner) {
+        // Fields are positional, comma-separated. Field 0: brightness.
+        unsigned brightness = 0;
+        if (std::sscanf(inner.c_str(), "%u", &brightness) != 1) {
+            throw std::runtime_error("Failed to parse brightness from: " + inner);
+        }
+        if (brightness > 255) {
+            throw std::runtime_error("Brightness out of range: " + std::to_string(brightness));
+        }
+
+        DisplayConfig cfg{};
+        cfg.brightness = static_cast<uint8_t>(brightness);
+
+        // Future fields would be parsed here from subsequent comma-separated values.
+        return cfg;
+    }
+};
+
+struct SkinConfigParser {
+    static SkinConfig parse(const std::string& inner) {
+        if (inner.empty()) {
+            throw std::runtime_error("Empty skin name in schedule entry");
+        }
+        return SkinConfig{inner};
+    }
+};
+
+// ---------------------------------------------------------------------------
+// Schedule
+// ---------------------------------------------------------------------------
+/// A daily schedule mapping time-of-day entries to TConfig values.
 ///
 /// The active config at any moment is the one with the greatest start time
 /// that is <= the current time. If the current time is before all entries,
 /// the last entry of the day (i.e. the one that wraps around midnight) is used.
 ///
-/// Schedule string format: "HH:MM={brightness,...other fields that could be added later},HH:MM={brightness,...},..."
-///   e.g. "20:00={200},21:00={150},6:00={255}"
+/// Examples:
+///   DisplayConfigSchedule: "20:00={200},21:00={150},6:00={255}"
+///   SkinSchedule:          "8:00={Debug},22:00={Night Anime}"
+template <typename TConfig, typename TParser>
 class Schedule {
 public:
     Schedule() = default;
@@ -56,9 +104,9 @@ public:
         parse(scheduleStr);
     }
 
-    /// Return the DisplayConfig that should be active at the given time.
+    /// Return the config that should be active at the given time.
     /// Throws if the schedule is empty.
-    DisplayConfig getConfigAt(TimeOfDay now) const {
+    TConfig getConfigAt(TimeOfDay now) const {
         if (entries_.empty()) {
             throw std::runtime_error("Schedule is empty");
         }
@@ -74,7 +122,7 @@ public:
         return it->second;
     }
 
-    DisplayConfig getConfigAt(uint8_t hour, uint8_t minute) const {
+    TConfig getConfigAt(uint8_t hour, uint8_t minute) const {
         return getConfigAt(TimeOfDay{static_cast<uint16_t>(hour * 60 + minute)});
     }
 
@@ -101,7 +149,7 @@ public:
         return nowIt == nightIt;
     }
 
-    DisplayConfig getNextConfigAt(TimeOfDay now) const {
+    TConfig getNextConfigAt(TimeOfDay now) const {
         if (entries_.empty()) {
             throw std::runtime_error("Schedule is empty");
         }
@@ -114,7 +162,7 @@ public:
     }
 
     /// Direct access to the underlying ordered map.
-    const std::map<TimeOfDay, DisplayConfig>& entries() const {
+    const std::map<TimeOfDay, TConfig>& entries() const {
         return entries_;
     }
 
@@ -122,32 +170,39 @@ public:
     size_t size() const { return entries_.size(); }
 
 private:
-    std::map<TimeOfDay, DisplayConfig> entries_;
+    std::map<TimeOfDay, TConfig> entries_;
 
     void parse(const std::string& str) {
         if (str.empty()) {
-            LOG_INFO << "Empty brightness schedule string, ignoring\n";
+            LOG_INFO << "Empty schedule string, ignoring\n";
             return;
         }
         try {
-            size_t pos = 0;
-            while (pos < str.size()) {
-                size_t comma = str.find(',', pos);
-                if (comma == std::string::npos) comma = str.size();
-
-                std::string token = str.substr(pos, comma - pos);
-                parseEntry(token);
-
-                pos = comma + 1;
+            // Split on top-level commas only (commas inside {…} belong to the
+            // config payload). This keeps multi-field configs intact.
+            int depth = 0;
+            size_t tokenStart = 0;
+            for (size_t i = 0; i < str.size(); ++i) {
+                char c = str[i];
+                if (c == '{') {
+                    ++depth;
+                } else if (c == '}') {
+                    if (depth > 0) --depth;
+                } else if (c == ',' && depth == 0) {
+                    parseEntry(str.substr(tokenStart, i - tokenStart));
+                    tokenStart = i + 1;
+                }
             }
+            // Final token after the last top-level comma.
+            parseEntry(str.substr(tokenStart));
         } catch (const std::runtime_error& e) {
-            LOG_WARN << "Invalid brightness schedule string, ignoring: " << e.what();
+            LOG_WARN << "Invalid schedule string, ignoring: " << e.what();
             entries_.clear();
         }
     }
 
     void parseEntry(const std::string& token) {
-        // Expected: "H:MM={brightness}" or "HH:MM={brightness}"
+        // Expected: "H:MM={payload}" or "HH:MM={payload}"
         size_t eq = token.find('=');
         if (eq == std::string::npos) {
             throw std::runtime_error("Invalid schedule entry (missing '='): " + token);
@@ -157,8 +212,14 @@ private:
         std::string valuePart = token.substr(eq + 1);
 
         TimeOfDay tod = parseTime(timePart);
-        DisplayConfig cfg = parseConfig(valuePart);
-        entries_[tod] = cfg;
+        entries_[tod] = TParser::parse(stripBraces(valuePart));
+    }
+
+    static std::string stripBraces(const std::string& s) {
+        if (s.size() < 2 || s.front() != '{' || s.back() != '}') {
+            throw std::runtime_error("Invalid config format (expected {…}): " + s);
+        }
+        return s.substr(1, s.size() - 2);
     }
 
     static TimeOfDay parseTime(const std::string& s) {
@@ -171,28 +232,7 @@ private:
         }
         return TimeOfDay{static_cast<uint16_t>(h * 60 + m)};
     }
-
-    static DisplayConfig parseConfig(const std::string& s) {
-        // Strip surrounding braces: "{brightness}" or "{brightness,...}"
-        if (s.size() < 2 || s.front() != '{' || s.back() != '}') {
-            throw std::runtime_error("Invalid config format (expected {…}): " + s);
-        }
-        std::string inner = s.substr(1, s.size() - 2);
-
-        // Split on ',' and parse fields positionally.
-        // Field 0: brightness
-        unsigned brightness = 0;
-        if (std::sscanf(inner.c_str(), "%u", &brightness) != 1) {
-            throw std::runtime_error("Failed to parse brightness from: " + inner);
-        }
-        if (brightness > 255) {
-            throw std::runtime_error("Brightness out of range: " + std::to_string(brightness));
-        }
-
-        DisplayConfig cfg{};
-        cfg.brightness = static_cast<uint8_t>(brightness);
-
-        // Future fields would be parsed here from subsequent comma-separated values.
-        return cfg;
-    }
 };
+
+using DisplayConfigSchedule = Schedule<DisplayConfig, DisplayConfigParser>;
+using SkinSchedule          = Schedule<SkinConfig, SkinConfigParser>;

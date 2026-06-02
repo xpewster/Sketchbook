@@ -49,6 +49,7 @@ public:
         bool resetAfterFlash = true;
         uint8_t brightness = 255; // 0-255
         std::string brightnessScheduleStr = ""; // e.g. "19:30={200},21:30={160},06:00={255}"
+        std::string skinScheduleStr = ""; // e.g. "08:00={Debug},22:00={Sketchbook}"
         bool espLogging = false;
         std::string espSerialPort; // e.g. "COM3"
     };
@@ -96,6 +97,7 @@ public:
                 preferences.resetAfterFlash = (*prefTable)["reset_after_flash"].value_or(true);
                 preferences.brightness = (*prefTable)["brightness"].value_or(255);
                 preferences.brightnessScheduleStr = (*prefTable)["brightness_schedule"].value_or("");
+                preferences.skinScheduleStr = (*prefTable)["skin_schedule"].value_or("");
                 preferences.espLogging = (*prefTable)["esp_logging"].value_or(false);
                 preferences.espSerialPort = (*prefTable)["esp_serial_port"].value_or("");
             }
@@ -112,6 +114,7 @@ public:
                      << ", resetAfterFlash=" << preferences.resetAfterFlash
                      << ", brightness=" << static_cast<int>(preferences.brightness)
                      << ", brightnessSchedule=" << preferences.brightnessScheduleStr
+                     << ", skinSchedule=" << preferences.skinScheduleStr
                      << ", espLogging=" << preferences.espLogging
                      << ", espSerialPort=" << (preferences.espSerialPort.empty() ? "NOT SET" : preferences.espSerialPort)
                      << "\n";
@@ -227,6 +230,7 @@ public:
                 {"reset_after_flash", preferences.resetAfterFlash},
                 {"brightness", preferences.brightness},
                 {"brightness_schedule", preferences.brightnessScheduleStr},
+                {"skin_schedule", preferences.skinScheduleStr},
                 {"esp_logging", preferences.espLogging},
                 {"esp_serial_port", preferences.espSerialPort}
             });

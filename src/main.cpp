@@ -190,11 +190,18 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
 
     // DisplayConfig scheduler
     uint8_t currentBrightness = settings.preferences.brightness;
-    Schedule displayConfigSchedule(settings.preferences.brightnessScheduleStr);
+    DisplayConfigSchedule displayConfigSchedule(settings.preferences.brightnessScheduleStr);
     if (!displayConfigSchedule.empty()) {
         LOG_INFO << "Parsed brightness schedule \"" << settings.preferences.brightnessScheduleStr << "\" with " << displayConfigSchedule.size() << " entries\n";
         currentBrightness = displayConfigSchedule.getConfigAt(currentTimeOfDay()).brightness;
         LOG_INFO << "Initial brightness from schedule: " << static_cast<int>(currentBrightness) << "\n";
+    }
+
+    // Skin scheduler (no UI yet; configured via the skinSchedule line in settings.toml)
+    SkinSchedule skinSchedule(settings.preferences.skinScheduleStr);
+    std::string lastScheduledSkin;
+    if (!skinSchedule.empty()) {
+        LOG_INFO << "Parsed skin schedule \"" << settings.preferences.skinScheduleStr << "\" with " << skinSchedule.size() << " entries\n";
     }
     
     // TCP connection and sender thread
@@ -498,7 +505,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
         }
     };
 
-    auto selectSkin = [&](const std::string& newSkinName) {
+    auto selectSkin = [&](const std::string& newSkinName, bool suppressNotifications = false) {
         LOG_INFO << "Skin changed from " << settings.preferences.selectedSkin << " to: " << newSkinName << " (" << (skins[newSkinName]->initialized ? "initialized" : "not initialized") << ")\n";
         settings.preferences.selectedSkin = newSkinName;
         int currentSkinIndex = getSkinIndex(skinOptions, newSkinName);
@@ -519,7 +526,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
                     settings.preferences.flashMode = true;
                 } else {
                     LOG_INFO << "AutoMemFlash is disabled, notifying user to flash new skin: " << newSkinName << ". Switching off flash mode\n";
-                    trayManager.ShowNotification("Flash required", std::string("The new skin recommends a MemFlash to be drawn properly! Open sketchbook to initiate.") + (settings.preferences.flashMode ? " (Flash mode has been switched off)" : ""), NIIF_USER);
+                    if (!suppressNotifications) {
+                        trayManager.ShowNotification("Flash required", std::string("The new skin recommends a MemFlash to be drawn properly! Open sketchbook to initiate.") + (settings.preferences.flashMode ? " (Flash mode has been switched off)" : ""), NIIF_USER);
+                    }
                     flashModeCB.setChecked(false, true);
                     settings.preferences.flashMode = false;
                 }
@@ -782,7 +791,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
             }
 
             if (flashBrightnessScheduleBtn.update(mousePos, mousePressed, *window)) {
-                displayConfigSchedule = Schedule(settings.preferences.brightnessScheduleStr);
+                displayConfigSchedule = DisplayConfigSchedule(settings.preferences.brightnessScheduleStr);
                 if (!displayConfigSchedule.empty()) {
                     LOG_INFO << "Parsed brightness schedule \"" << settings.preferences.brightnessScheduleStr << "\" with " << displayConfigSchedule.size() << " entries\n";
                 } else {
@@ -983,6 +992,25 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
                     LOG_INFO << "Brightness changed to " << (int)currentBrightness << " due to schedule. Sending to device.\n";
                     sender.sendSetBrightness(currentBrightness, 255);
                     brightnessSlider.setValue(currentBrightness);
+                }
+            }
+        }
+
+        if (!skinSchedule.empty()) {
+            std::string scheduledSkin = skinSchedule.getConfigAt(currentTimeOfDay()).skinName;
+            if (scheduledSkin != lastScheduledSkin) {   // fires only when crossing a schedule boundary
+                lastScheduledSkin = scheduledSkin;
+                if (scheduledSkin != skinName) {
+                    if (skins.find(scheduledSkin) != skins.end()) {
+                        LOG_INFO << "Skin changed to \"" << scheduledSkin << "\" due to schedule.\n";
+                        selectSkin(scheduledSkin, true);
+                        skinName = scheduledSkin;
+                        int idx = getSkinIndex(skinOptions, skinName);
+                        skinDropdown.setSelectedIndex(idx);
+                        trayManager.SetCurrentSkinIndex(idx);
+                    } else {
+                        LOG_WARN << "Scheduled skin \"" << scheduledSkin << "\" is not loaded; ignoring.\n";
+                    }
                 }
             }
         }
