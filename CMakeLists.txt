@@ -22,14 +22,14 @@ FetchContent_Declare(SFML
     SYSTEM)
 FetchContent_MakeAvailable(SFML)
 
-# TinyXML2
-FetchContent_Declare(tinyxml2
-    GIT_REPOSITORY https://github.com/leethomason/tinyxml2.git
-    GIT_TAG 10.0.0
+# pugixml
+FetchContent_Declare(pugixml
+    GIT_REPOSITORY https://github.com/zeux/pugixml.git
+    GIT_TAG v1.15
     GIT_SHALLOW ON
     EXCLUDE_FROM_ALL
     SYSTEM)
-FetchContent_MakeAvailable(tinyxml2)
+FetchContent_MakeAvailable(pugixml)
 
 # JSON parser
 FetchContent_Declare(json
@@ -59,7 +59,7 @@ target_link_libraries(Sketchbook PRIVATE
     tomlplusplus::tomlplusplus
     pdh.lib 
     ws2_32.lib
-    tinyxml2::tinyxml2
+    pugixml::pugixml
     ${JPEG_TURBO_DIR}/lib/turbojpeg-static.lib
 )
 
